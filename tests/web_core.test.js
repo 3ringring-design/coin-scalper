@@ -378,3 +378,30 @@ if (process.argv[2]) {
 } else {
   console.log(`web core tests passed (${Core.STRATEGIES.length} strategies, ${Core.STRATEGIES.reduce((s, x) => s + Core.grid(x).length, 0)} combos, ${anyTrades} trades)`);
 }
+
+// 14) 1분 스캘핑 엔진: 실시간처럼 한 봉씩 진행하며 상태를 저장(JSON)·복원해도 백테스트와 결과가 같아야 함
+{
+  const Scalp = require("../web/scalp.js");
+  const mk = seed => { let a = seed >>> 0; const r = () => { a ^= a << 13; a >>>= 0; a ^= a >>> 17; a ^= a << 5; a >>>= 0; return a / 4294967296; };
+    const n = 1440 * 10, c = { ts: [], open: [], high: [], low: [], close: [], volume: [], takerBuy: [] }; let px = 100;
+    for (let i = 0; i < n; i++) { const o = px; let hi = o, lo = o; for (let k = 0; k < 3; k++) { px *= Math.exp(0.0006 * (r() - 0.5) * 3 + 0.00002 * Math.sin(i / 3000)); hi = Math.max(hi, px); lo = Math.min(lo, px); }
+      const v = 1 + r() * (r() < 0.01 ? 20 : 1); c.ts.push(Date.UTC(2025, 0, 1) + i * 6e4); c.open.push(o); c.close.push(px); c.high.push(hi); c.low.push(lo); c.volume.push(v); c.takerBuy.push(v * r()); }
+    return c; };
+  const sets = [1, 2].map(s => ({ sym: "S" + s, F: Scalp.features(mk(s * 7777)) })), idx = Scalp.align(sets);
+  const o = { startingCash: 1000, riskPct: 0.005, maxLev: 20, cooldown: 1, takerFee: 0.0005, makerFee: 0.0002, slip: 0.00015, through: 0.0001 };
+  for (const id of Object.keys(Scalp.LIVE)) {
+    const p = { ...Scalp.liveParams(id), htfN: 10, erLen: 6, erThr: 0.1 }, from = 1440 * 2;
+    const bt = Scalp.simulate(sets, idx, id, p, { ...o, from });
+    let A = Scalp.makeAccount(o, p, 2), st = sets.map(Scalp.newSymState);
+    const sig = sets.map(x => Scalp.STRATS[id].make(x.F, p));
+    for (let t = from; t < idx[0].length; t++) {
+      for (let k = 0; k < 2; k++) Scalp.stepBar(A, st[k], sets[k].sym, sets[k].F.c, idx[k][t], sig[k], p, o);
+      Scalp.markEquity(A, st);
+      const saved = JSON.parse(JSON.stringify({ A, st }));            // 매 봉 저장·복원 (실시간과 같음)
+      A = Scalp.makeAccount(o, p, 2, saved.A); st = saved.st;
+    }
+    for (let k = 0; k < 2; k++) if (st[k].pos) A.close(st[k], sets[k].sym, st[k].px, false, "end", 0);
+    if (process.env.SHOWN) console.log(id, bt.trades, bt.ret);
+    assert(Math.abs(A.cash / 1000 - 1 - bt.ret) < 1e-9 && A.nTr === bt.trades, `스캘핑 ${id}: 실시간 방식 ${A.cash} / ${A.nTr}회 vs 백테스트 ${bt.ret} / ${bt.trades}회`);
+  }
+}

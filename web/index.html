@@ -156,6 +156,31 @@ canvas { display: block; width: 100%; height: 240px; }
       <h2>로그</h2>
       <div class="log" id="log"></div>
     </div>
+    <div class="panel" id="scPanel" style="border-color:#5a2a2a">
+      <h2>🧪 1분 스캘핑 실험 <span class="badge paper">별도 모의 계좌</span> <span class="muted small">백테스트상 손실 — 실제 돈 금지 · 위 메인 계좌와 따로 돌아가요</span></h2>
+      <div class="pad">
+        <div class="note" style="margin-bottom:10px">바이낸스 선물 1분봉 2년·22구간 롤링 검증에서 순수 1분 전략은 모두 손실이었어요(수수료 0이어도). 실시간에서 실제로 어떻게 움직이는지 보는 실험용이에요.
+          규칙은 백테스트와 같은 코드(scalp.js)를 써요: 완성된 1분봉마다 판단 · 지정가는 가격이 1bp 이상 뚫어야 체결 · 같은 봉에서 손절·익절이 겹치면 손절 · 수수료 시장가 0.05%+1.5bp / 지정가 0.02%.</div>
+        <div class="row">
+          <label class="muted small">전략</label><select id="scStrat"></select>
+          <label class="muted small">거래당 위험</label><input type="number" id="scRisk" step="0.25" min="0.1" max="5" style="width:64px"><span class="muted small">%</span>
+          <label class="muted small">레버리지 최대</label><input type="number" id="scLev" min="1" max="50" style="width:56px"><span class="muted small">배</span>
+          <button class="btn primary" id="scRun">▶ 실험 시작</button>
+          <button class="btn small" id="scReset">실험 계좌 초기화</button>
+          <span class="muted small" id="scInfo"></span>
+        </div>
+        <div class="note small" id="scDesc" style="margin:6px 0 10px"></div>
+        <div class="cards">
+          <div class="card"><div class="k">실험 자산 (USDT)</div><div class="v" id="scEq">–</div></div>
+          <div class="card"><div class="k">수익률 / 최대 낙폭</div><div class="v" id="scRet">–</div></div>
+          <div class="card"><div class="k">거래 / 승률</div><div class="v" id="scTr">–</div></div>
+          <div class="card"><div class="k">낸 수수료</div><div class="v" id="scFee">–</div></div>
+        </div>
+      </div>
+      <div class="scroll"><table id="scPos"></table></div>
+      <div class="scroll"><table id="scTrades"></table></div>
+      <div class="log" id="scLog" style="max-height:160px"></div>
+    </div>
   </section>
 
   <!-- 전략 연구실 -->
@@ -295,6 +320,7 @@ canvas { display: block; width: 100%; height: 240px; }
 <div class="toast" id="toast"></div>
 
 <script src="core.js?v=__SHA__"></script>
+<script src="scalp.js?v=__SHA__"></script>
 <script>
 (() => {
 "use strict";
@@ -1270,6 +1296,106 @@ $("presetBtn").onclick = () => {
       { settings: { ...PRESET.settings, riskPct: l.riskPct, maxLev: l.maxLev }, start: true })) toast("세팅 완료 · 실행 중이에요");
 };
 
+// ---------------- 🧪 1분 스캘핑 실험 (메인과 별도인 모의 계좌 · 같은 탭 잠금 규칙) ----------------
+const SC_KEY = "cs_scalp";
+const scNew = (id = "hbrk", risk = 0.005, maxLev = 20) => ({ id, risk, maxLev, startingCash: 1000, running: false, A: null, st: {}, trades: [], logs: [] });
+let sc = store.get(SC_KEY, null) || scNew(), scAcc = null, scBusy = false, scTimer = null, scViewer = false;
+const scOpts = () => ({ startingCash: sc.startingCash, riskPct: sc.risk, maxLev: sc.maxLev, cooldown: 1, takerFee: 0.0005, makerFee: 0.0002, slip: 0.00015, through: 0.0001 });
+const scParams = () => Scalp.liveParams(sc.id);
+function scInit() { scAcc = Scalp.makeAccount(scOpts(), scParams(), Math.max(1, symbols().length), sc.A || undefined); sc.A = scAcc; }
+function scSave() { try { store.set(SC_KEY, sc); } catch { sc.trades = sc.trades.slice(-200); sc.logs = sc.logs.slice(-100); store.set(SC_KEY, sc); } }
+function scLog(msg, kind = "") { sc.logs.push({ t: Date.now(), msg, kind }); if (sc.logs.length > 150) sc.logs.splice(0, sc.logs.length - 150); }
+const scLockOwner = () => { const l = store.get("cs_scalp_lock", null); return l && Date.now() - l.t < 60000 ? l.id : null; };
+const scDirTxt = d => d > 0 ? "롱" : "숏";
+async function scTick() {
+  if (scBusy || !sc.running) return;
+  const own = scLockOwner();
+  if (own && own !== TAB_ID) { scStopTimer(); scViewer = true; renderScalp(); return; }
+  store.set("cs_scalp_lock", { id: TAB_ID, t: Date.now() });
+  scBusy = true;
+  try {
+    const p = scParams(), o = scOpts(), need = Scalp.needBars(sc.id, p), syms = symbols(), S0 = Scalp.STRATS[sc.id];
+    for (const sym of syms) {
+      try {
+        const all = await liveCandles(sym, "1m", need), c = sliceC(all, 0, -1), n = c.ts.length;
+        prices1m[sym] = all.close[all.close.length - 1];
+        if (n < need * 0.9) { $("scInfo").textContent = `${sym} 1분봉 준비 중… ${n}/${need}`; continue; }
+        const s = sc.st[sym] || (sc.st[sym] = Scalp.newSymState()), F = Scalp.features(c), sig = S0.make(F, p);
+        let from = s.done == null ? n - 1 : c.ts.findIndex(t => t > s.done);
+        if (from < 0) continue;
+        from = Math.max(from, n - 120, 1);                      // 오래 멈췄다면 최근 2시간만 이어서
+        for (let i = from; i < n; i++) {
+          for (const e of Scalp.stepBar(scAcc, s, sym, c, i, sig, p, o)) {
+            if (e.type === "open") scLog(`${scDirTxt(e.pos.dir)} 진입 ${sym} @ ${fmtP(e.pos.entry)}${e.maker ? " (지정가)" : ""} · ${fmtN(e.pos.qty * e.pos.entry)} USDT ≈ ${e.pos.lev.toFixed(1)}배 · 손절 ${fmtP(e.pos.stop)}${isN(e.pos.take) ? ` · 익절 ${fmtP(e.pos.take)}` : ""}`, "buy");
+            else if (e.type === "close") { const t = e.trade; sc.trades.push(t); if (sc.trades.length > 300) sc.trades.splice(0, sc.trades.length - 300);
+              scLog(`${scDirTxt(t.dir)} 청산 ${sym} ${({ stop: "손절", take: "익절", time: "시간 청산" })[t.why] || t.why} @ ${fmtP(t.exit)} | ${t.pnl >= 0 ? "+" : ""}${fmtN(t.pnl)} USDT (${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}R · 수수료 ${fmtN(t.fees)})`, t.pnl >= 0 ? "sell" : "err"); }
+            else if (e.type === "signal" && !e.sig.market) scLog(`${scDirTxt(e.sig.dir)} 신호 ${sym} → 지정가 @ ${fmtP(e.sig.limit)}`);
+          }
+          s.done = c.ts[i];
+        }
+      } catch (e) { scLog(`${sym}: ${e.message}`, "err"); }
+    }
+    Scalp.markEquity(scAcc, syms.map(x => sc.st[x]).filter(Boolean));
+    $("scInfo").textContent = `마지막 확인 ${new Date().toLocaleTimeString("ko-KR", { hour12: false })}`;
+    scSave();
+  } finally { scBusy = false; renderScalp(); }
+}
+const prices1m = {};
+function scStartTimer() {
+  scStopTimer();
+  try { scTimer = new Worker(URL.createObjectURL(new Blob([`setInterval(() => postMessage(1), 15000);`], { type: "text/javascript" }))); scTimer.onmessage = scTick; }
+  catch { const h = setInterval(scTick, 15000); scTimer = { terminate: () => clearInterval(h) }; }
+}
+function scStopTimer() { if (scTimer) { scTimer.terminate(); scTimer = null; } }
+function renderScalp() {
+  const A = scAcc, ret = A.eq / sc.startingCash - 1, n = A.nTr;
+  $("scRun").textContent = sc.running && !scViewer ? "■ 실험 정지" : scViewer ? "▶ 이 탭에서 실험" : "▶ 실험 시작";
+  $("scRun").className = "btn " + (sc.running && !scViewer ? "stop" : "primary");
+  $("scEq").textContent = fmtN(A.eq);
+  $("scRet").innerHTML = `<span class="${cls(ret)}">${fmtPct(ret)}</span> <span class="muted small">/ ${fmtPct(A.mdd, 1)}</span>`;
+  $("scTr").textContent = n ? `${n}회 · ${Math.round(A.wins / n * 100)}%` : "0회";
+  $("scFee").textContent = fmtN(A.fees);
+  $("scDesc").textContent = `${Scalp.STRATS[sc.id].desc} · 설정: ${Object.entries(Scalp.LIVE[sc.id].p).map(([k, v]) => `${k} ${v}`).join(", ")} · 백테스트: ${Scalp.LIVE[sc.id].bt}`;
+  const open = symbols().map(sym => [sym, sc.st[sym]]).filter(([, s]) => s && (s.pos || s.pend));
+  $("scPos").innerHTML = open.length ? `<tr><th>종목</th><th>상태</th><th>방향</th><th>가격</th><th>현재가</th><th>손절</th><th>익절</th><th>레버리지</th><th>평가 손익</th></tr>` +
+    open.map(([sym, s]) => { const ps = s.pos, px = prices1m[sym] ?? s.px;
+      if (!ps) return `<tr><td>${sym}</td><td class="muted">지정가 대기</td><td>${scDirTxt(s.pend.dir)}</td><td>${fmtP(s.pend.limit)}</td><td>${fmtP(px)}</td><td colspan="4" class="muted small">${fmtT(s.pend.expTs)}까지</td></tr>`;
+      const u = ps.dir * ps.qty * (px - ps.entry);
+      return `<tr><td>${sym}</td><td>보유</td><td>${scDirTxt(ps.dir)}</td><td>${fmtP(ps.entry)}</td><td>${fmtP(px)}</td><td>${fmtP(ps.stop)}</td><td>${isN(ps.take) ? fmtP(ps.take) : "추적"}</td><td>${ps.lev.toFixed(1)}배</td><td class="${cls(u)}">${u >= 0 ? "+" : ""}${fmtN(u)}</td></tr>`; }).join("")
+    : `<tr><td class="empty">보유·대기 주문 없음</td></tr>`;
+  const tr = sc.trades.slice(-30).reverse();
+  $("scTrades").innerHTML = tr.length ? `<tr><th>청산 시각</th><th>종목</th><th>방향</th><th>진입</th><th>청산</th><th>사유</th><th>손익</th><th>R</th><th>수수료</th></tr>` +
+    tr.map(t => `<tr><td>${fmtT(t.t)}</td><td>${t.sym}</td><td>${scDirTxt(t.dir)}</td><td>${fmtP(t.entry)}</td><td>${fmtP(t.exit)}</td><td>${({ stop: "손절", take: "익절", time: "시간" })[t.why] || t.why}</td><td class="${cls(t.pnl)}">${t.pnl >= 0 ? "+" : ""}${fmtN(t.pnl)}</td><td>${t.r.toFixed(2)}</td><td class="muted">${fmtN(t.fees)}</td></tr>`).join("")
+    : `<tr><td class="empty">아직 거래가 없어요.</td></tr>`;
+  $("scLog").innerHTML = sc.logs.slice(-40).reverse().map(l => `<div class="${l.kind}">${fmtT(l.t)} ${esc(l.msg)}</div>`).join("");
+}
+function scalpStatus() {
+  if (!scAcc || (!sc.running && !scAcc.nTr)) return "";
+  const A = scAcc, n = A.nTr, w = sc.trades.filter(t => t.pnl > 0);
+  return `🧪 1분 실험 (${Scalp.STRATS[sc.id].name}, 위험 ${(sc.risk * 100).toFixed(2)}%, 최대 ${sc.maxLev}배, ${sc.running ? "실행 중" : "정지"}): 자산 ${fmtN(A.eq)} (${fmtPct(A.eq / sc.startingCash - 1)}) 낙폭 ${fmtPct(A.mdd, 1)} | ${n}회 승률 ${n ? Math.round(A.wins / n * 100) : 0}% | 수수료 ${fmtN(A.fees)} | 평균 R ${sc.trades.length ? (sc.trades.reduce((a, t) => a + t.r, 0) / sc.trades.length).toFixed(2) : "-"}`;
+}
+$("scStrat").innerHTML = Object.keys(Scalp.LIVE).map(id => `<option value="${id}">${Scalp.STRATS[id].name} — ${Scalp.LIVE[id].bt}</option>`).join("");
+$("scStrat").value = sc.id; $("scRisk").value = (sc.risk * 100).toFixed(2).replace(/\.?0+$/, ""); $("scLev").value = sc.maxLev;
+const scReconfig = (why) => {
+  const id = $("scStrat").value, risk = Math.max(0.001, (+$("scRisk").value || 0.5) / 100), lev = Math.max(1, Math.min(50, +$("scLev").value || 20));
+  if (id === sc.id && risk === sc.risk && lev === sc.maxLev) return;
+  if (scAcc && scAcc.nTr && !confirm(`${why}\n실험 계좌가 새로 시작돼요. 계속할까요?`)) { $("scStrat").value = sc.id; $("scRisk").value = sc.risk * 100; $("scLev").value = sc.maxLev; return; }
+  const was = sc.running; sc = scNew(id, risk, lev); sc.running = was; scInit();
+  scLog(`실험 설정: ${Scalp.STRATS[id].name} · 위험 ${(risk * 100).toFixed(2)}% · 최대 ${lev}배 · 새 계좌 1,000 USDT`); scSave(); renderScalp();
+};
+$("scStrat").onchange = () => scReconfig("전략을 바꾸면");
+$("scRisk").onchange = () => scReconfig("위험을 바꾸면");
+$("scLev").onchange = () => scReconfig("레버리지를 바꾸면");
+$("scRun").onclick = () => {
+  if (sc.running && !scViewer) { sc.running = false; scStopTimer(); if (scLockOwner() === TAB_ID) store.del("cs_scalp_lock"); scLog("실험 정지"); }
+  else { scViewer = false; sc.running = true; store.set("cs_scalp_lock", { id: TAB_ID, t: Date.now() }); scLog(`실험 시작: ${Scalp.STRATS[sc.id].name} · ${symbols().join(", ")} · 1분봉`); scStartTimer(); scTick(); }
+  scSave(); renderScalp();
+};
+$("scReset").onclick = () => { if (!confirm("실험 계좌를 1,000 USDT로 새로 시작할까요?")) return; const was = sc.running; sc = scNew(sc.id, sc.risk, sc.maxLev); sc.running = was; scInit(); scLog("실험 계좌 초기화"); scSave(); renderScalp(); };
+window.addEventListener("pagehide", () => { if (scLockOwner() === TAB_ID) store.del("cs_scalp_lock"); });
+scInit(); renderScalp();
+if (sc.running) { if (scLockOwner() && scLockOwner() !== TAB_ID) scViewer = true; else { scStartTimer(); scTick(); } renderScalp(); }
+
 // ---------------- 설정 화면 ----------------
 let formStratId = S.strategyId;
 function renderSettings() {
@@ -1374,6 +1500,7 @@ $("copyBtn").onclick = async () => {
     labRows.length && labMeta ? `연구실 (${labMeta.days}일 ${labMeta.mode === "rolling" ? `롤링 학습${labMeta.trainD}→검증${labMeta.testD}일 × ${labMeta.nFolds}구간` : "학습70/검증30"}, ${symbols().join("/")}, ${COST_MODES[labMeta.costKey].label}, ${DIR_KO[labMeta.dir]}, 1배, 투자금 ${labMeta.sizing}):\n` + labRows.slice(0, 10).map((r, k) =>
       `  #${k + 1} ${r.name} ${r.tf} | ${r.folds.length > 1 ? `+구간 ${r.foldPos}/${r.folds.length} [${r.folds.map(f => fmtPct(f.test.avg, 1)).join(" ")}] | ` : ""}검증 ${fmtPct(r.test.avg)} ${r.test.trades}회(L${r.test.longs} ${fmtPct(r.test.longPnl, 1)}/S${r.test.shorts} ${fmtPct(r.test.shortPnl, 1)}) 수익÷낙폭 ${isN(r.test.ratio) ? r.test.ratio.toFixed(2) : "∞"} 승률 ${(r.test.winRate * 100).toFixed(0)}% MDD ${fmtPct(r.test.mdd)} PF ${fmtPF(r.test.pf)} | 거래당 ${fmtPct(r.test.edge, 3)} 여유 ${fmtPct(r.test.edge - r.rt, 3)} | 학습 ${fmtPct(r.train.avg)} | 보유 ${fmtPct(r.test.bh)} | 최근설정 ${paramText(r.s, r.p, true)}`).join("\n") : "",
     stressText,
+    scalpStatus(),
     labMeta?.combo ? `조합 (${labMeta.combo.names.join(" + ")}): 검증 ${fmtPct(labMeta.combo.avg)} 최대낙폭 ${fmtPct(labMeta.combo.mdd)}` : "",
     labRows[labSel]?.levRows ? `레버리지 (${labRows[labSel].name} ${labRows[labSel].tf}): ` + labRows[labSel].levRows.map(x => `${x.lev}배 ${fmtPct(x.avg)} MDD ${fmtPct(x.mdd)}${x.liq ? ` 청산${x.liq}` : ""}`).join(" / ") : "",
     labRows[labSel]?.exitMap ? `익절·손절 지도 (${labRows[labSel].name} ${labRows[labSel].tf}, 행=손절, 열=${exitAxes(labRows[labSel].s, labRows[labSel].gx).xk || "-"} ${exitAxes(labRows[labSel].s, labRows[labSel].gx).xs.join("/")}): ` + labRows[labSel].exitMap.map(row => `손절${row[0].y}: ` + row.map(c => fmtPct(c.avg, 1) + (c.picked ? "★" + c.picked : "")).join(" ")).join(" | ") : "",

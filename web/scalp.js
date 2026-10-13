@@ -199,73 +199,105 @@
       return idx;
     });
   }
+  // ---------- 계좌 + 한 봉 진행 (백테스트와 실시간이 같은 코드를 씀) ----------
+  // 시간은 봉 번호 대신 타임스탬프로 셈 → 실시간에서 캔들 배열이 잘려도 안전
+  function makeAccount(o, p, nS, state) {
+    const A = state || { cash: o.startingCash, eq: o.startingCash, peak: o.startingCash, mdd: 0, fees: 0, makerN: 0, nTr: 0, wins: 0, gross: 0 };
+    A.open = (s, dir, price, atrV, maker, ts, take) => {
+      let risk = o.riskPct;
+      if (o.ddCut && A.eq / A.peak - 1 < -o.ddCut) risk *= o.ddMult ?? 0.5;
+      const stopD = p.s * atrV, qty0 = (A.eq * risk) / stopD, cap = (A.eq * o.maxLev) / nS;
+      const qty = Math.min(qty0, cap / price);
+      if (!(qty > 0)) return null;
+      const notional = qty * price, fee = notional * (maker ? o.makerFee : o.takerFee);
+      A.cash -= fee; A.fees += fee; if (maker) A.makerN++;
+      s.pos = { dir, entry: price, qty, t0: ts, stop: price - dir * stopD, take: take ?? (p.m > 0 ? price + dir * p.m * atrV : NaN), fee, maker, risk: qty * stopD, atr: atrV, ext: price, lev: notional / Math.max(A.eq, 1e-9) };
+      return s.pos;
+    };
+    A.close = (s, sym, price, maker, why, ts) => {
+      const ps = s.pos, notional = ps.qty * price, fee = notional * (maker ? o.makerFee : o.takerFee), g = ps.dir * ps.qty * (price - ps.entry);
+      A.cash += g - fee; A.fees += fee; if (maker) A.makerN++;
+      const pnl = g - fee - ps.fee; A.nTr++; if (pnl > 0) A.wins++; A.gross += ps.dir * (price / ps.entry - 1);
+      const tr = { sym, dir: ps.dir, entry: ps.entry, exit: price, t0: ps.t0, t: ts, pnl, r: pnl / ps.risk, why, gross: ps.dir * (price / ps.entry - 1), lev: ps.lev, fees: fee + ps.fee };
+      s.pos = null; s.lastTs = ts;
+      return tr;
+    };
+    return A;
+  }
+  const newSymState = () => ({ pos: null, pend: null, mkt: null, lastTs: -1e15, px: NaN });
+  // i번째(완성된) 1분봉 하나를 진행: 대기 주문 체결 → 손절/익절/시간 청산 → 봉 끝에서 새 신호. 돌려주는 값 = 이번 봉의 사건 목록
+  function stepBar(A, s, sym, c, i, sigFn, p, o) {
+    const ev = [], ts = c.ts[i], slip = o.slip ?? 0, th = o.through ?? 0, cd = o.cooldown ?? 1;
+    if (s.mkt) { if (!s.pos) { const ps = A.open(s, s.mkt.dir, c.open[i] * (1 + s.mkt.dir * slip), s.mkt.atr, false, ts); if (ps) ev.push({ type: "open", sym, pos: ps }); } s.mkt = null; }
+    if (s.pend && !s.pos) {
+      const L = s.pend.limit, d = s.pend.dir;
+      if (d > 0 ? c.low[i] < L * (1 - th) : c.high[i] > L * (1 + th)) { const ps = A.open(s, d, L, s.pend.atr, true, ts, s.pend.take); if (ps) ev.push({ type: "open", sym, pos: ps, maker: true }); s.pend = null; }
+      else if (ts >= s.pend.expTs) { ev.push({ type: "cancel", sym, pend: s.pend }); s.pend = null; }
+    }
+    const ps = s.pos;
+    if (ps) {
+      const d = ps.dir, fresh = ts === ps.t0;
+      if (p.tr > 0 && !fresh) ps.stop = d > 0 ? Math.max(ps.stop, ps.ext - p.tr * ps.atr) : Math.min(ps.stop, ps.ext + p.tr * ps.atr);
+      let tr = null;
+      if (d > 0 ? c.low[i] <= ps.stop : c.high[i] >= ps.stop) {
+        const gap = !fresh && (d > 0 ? c.open[i] < ps.stop : c.open[i] > ps.stop);
+        tr = A.close(s, sym, (gap ? c.open[i] : ps.stop) * (1 - d * slip), false, "stop", ts);
+      } else if (!fresh && ok(ps.take) && (d > 0 ? c.high[i] > ps.take * (1 + th) : c.low[i] < ps.take * (1 - th)) && (d > 0 ? ps.take > ps.entry : ps.take < ps.entry)) {
+        tr = A.close(s, sym, ps.take, true, "take", ts);
+      } else if ((ts - ps.t0) / M >= p.T - 1e-9) tr = A.close(s, sym, c.close[i] * (1 - d * slip), false, "time", ts);
+      if (tr) ev.push({ type: "close", sym, trade: tr });
+      if (s.pos) s.pos.ext = d > 0 ? Math.max(s.pos.ext, c.high[i]) : Math.min(s.pos.ext, c.low[i]);
+    }
+    s.px = c.close[i];
+    if (!s.pos && !s.pend && !s.mkt && (ts - s.lastTs) / M > cd + 1e-9) {
+      const sg = sigFn(i);
+      if (sg) {
+        if (sg.market) s.mkt = { dir: sg.dir, atr: sg.atr };
+        else s.pend = { dir: sg.dir, limit: sg.limit, take: sg.take, atr: sg.atr, expTs: ts + (sg.exp - i) * M };
+        ev.push({ type: "signal", sym, sig: sg });
+      }
+    }
+    return ev;
+  }
+  function markEquity(A, states) {
+    let u = 0; for (const s of states) { const ps = s.pos; if (ps && ok(s.px)) u += ps.dir * ps.qty * (s.px - ps.entry); }
+    A.eq = A.cash + u; if (A.eq > A.peak) A.peak = A.eq; const dd = A.eq / A.peak - 1; if (dd < A.mdd) A.mdd = dd;
+    return A.eq;
+  }
+
   function simulate(sets, idx, id, p, o) {
     const S = STRATS[id], nS = sets.length, T = sets[0].F.c.ts;
-    const from = o.from ?? 0, to = Math.min(o.to ?? T.length, T.length), slip = o.slip ?? 0, th = o.through ?? 0;
-    const st = sets.map(() => ({ pos: null, pend: null, mkt: null, last: -1e9, px: NaN })), sig = sets.map(x => S.make(x.F, p));
-    let cash = o.startingCash, eq = cash, peak = cash, mdd = 0, nTr = 0, wins = 0, gross = 0, fees = 0, makerN = 0, fills = 0;
-    const curve = o.curve ? [] : null, trades = o.trades ? [] : null, cd = o.cooldown ?? 1;
-    const open = (s, k, dir, price, atrV, maker, i, take) => {
-      let risk = o.riskPct;
-      if (o.ddCut && eq / peak - 1 < -o.ddCut) risk *= o.ddMult ?? 0.5;
-      const stopD = p.s * atrV, qty0 = (eq * risk) / stopD, cap = (eq * o.maxLev) / nS;
-      const qty = Math.min(qty0, cap / price);
-      if (!(qty > 0)) return;
-      const notional = qty * price, fee = notional * (maker ? o.makerFee : o.takerFee);
-      cash -= fee; fees += fee; if (maker) makerN++;
-      s.pos = { dir, entry: price, qty, i0: i, stop: price - dir * stopD, take: take ?? (p.m > 0 ? price + dir * p.m * atrV : NaN), fee, maker, risk: qty * stopD, atr: atrV, ext: price };
-    };
-    const close = (s, k, price, maker, why, t) => {
-      const ps = s.pos, notional = ps.qty * price, fee = notional * (maker ? o.makerFee : o.takerFee), g = ps.dir * ps.qty * (price - ps.entry);
-      cash += g - fee; fees += fee; if (maker) makerN++;
-      const pnl = g - fee - ps.fee; nTr++; if (pnl > 0) wins++; gross += ps.dir * (price / ps.entry - 1);
-      if (trades) trades.push({ sym: sets[k].sym, dir: ps.dir, pnl, r: pnl / ps.risk, why, gross: ps.dir * (price / ps.entry - 1), lev: notional / Math.max(eq, 1e-9), t });
-      s.pos = null;
-    };
+    const from = o.from ?? 0, to = Math.min(o.to ?? T.length, T.length);
+    const st = sets.map(newSymState), sig = sets.map(x => S.make(x.F, p)), A = makeAccount(o, p, nS);
+    const curve = o.curve ? [] : null, trades = o.trades ? [] : null;
     for (let t = from; t < to; t++) {
       for (let k = 0; k < nS; k++) {
         const i = idx[k][t]; if (i < 1) continue;
-        const s = st[k], c = sets[k].F.c;
-        if (s.mkt) { if (!s.pos) { const px = c.open[i] * (1 + s.mkt.dir * slip); open(s, k, s.mkt.dir, px, s.mkt.atr, false, i); fills++; } s.mkt = null; }
-        if (s.pend && !s.pos) {
-          const L = s.pend.limit, d = s.pend.dir;
-          if (d > 0 ? c.low[i] < L * (1 - th) : c.high[i] > L * (1 + th)) { open(s, k, d, L, s.pend.atr, true, i, s.pend.take); fills++; s.pend = null; }
-          else if (i >= s.pend.exp) s.pend = null;
-        }
-        const ps = s.pos;
-        if (ps) {
-          const d = ps.dir;
-          if (p.tr > 0 && i > ps.i0) {                       // 추적손절: 직전 봉까지의 최고(최저)가 기준
-            ps.stop = d > 0 ? Math.max(ps.stop, ps.ext - p.tr * ps.atr) : Math.min(ps.stop, ps.ext + p.tr * ps.atr);
-          }
-          if (d > 0 ? c.low[i] <= ps.stop : c.high[i] >= ps.stop) {
-            const gap = i > ps.i0 && (d > 0 ? c.open[i] < ps.stop : c.open[i] > ps.stop), px = (gap ? c.open[i] : ps.stop) * (1 - d * slip);
-            close(s, k, px, false, "stop", T[t]); s.last = i;
-          } else if (i > ps.i0 && ok(ps.take) && (d > 0 ? c.high[i] > ps.take * (1 + th) : c.low[i] < ps.take * (1 - th)) && (d > 0 ? ps.take > ps.entry : ps.take < ps.entry)) {
-            close(s, k, ps.take, true, "take", T[t]); s.last = i;
-          } else if (i - ps.i0 >= p.T) { close(s, k, c.close[i] * (1 - d * slip), false, "time", T[t]); s.last = i; }
-          if (s.pos) s.pos.ext = d > 0 ? Math.max(s.pos.ext, c.high[i]) : Math.min(s.pos.ext, c.low[i]);
-        }
-        s.px = c.close[i];
-        if (!s.pos && !s.pend && !s.mkt && i - s.last > cd) {
-          const sg = sig[k](i);
-          if (sg) { if (sg.market) s.mkt = sg; else s.pend = sg; }
-        }
+        const ev = stepBar(A, st[k], sets[k].sym, sets[k].F.c, i, sig[k], p, o);
+        if (trades) for (const e of ev) if (e.type === "close") trades.push(e.trade);
       }
-      let u = 0; for (let k = 0; k < nS; k++) { const ps = st[k].pos; if (ps) u += ps.dir * ps.qty * (st[k].px - ps.entry); }
-      eq = cash + u; if (eq > peak) peak = eq; const dd = eq / peak - 1; if (dd < mdd) mdd = dd;
-      if (curve && (t % 15 === 0)) curve.push(eq);
-      if (eq <= 0) { eq = 0; break; }
+      markEquity(A, st);
+      if (curve && (t % 15 === 0)) curve.push(A.eq);
+      if (A.eq <= 0) { A.eq = 0; break; }
     }
-    for (let k = 0; k < nS; k++) if (st[k].pos) close(st[k], k, st[k].px, false, "end", T[to - 1]);
-    eq = cash;
-    return { ret: eq / o.startingCash - 1, mdd, trades: nTr, win: nTr ? wins / nTr : 0, edge: nTr ? gross / nTr : 0, fees: fees / o.startingCash, makerShare: makerN / Math.max(1, 2 * nTr), curve, list: trades };
+    for (let k = 0; k < nS; k++) if (st[k].pos) { const tr = A.close(st[k], sets[k].sym, st[k].px, false, "end", T[to - 1]); if (trades) trades.push(tr); }
+    const nTr = A.nTr;
+    return { ret: A.cash / o.startingCash - 1, mdd: A.mdd, trades: nTr, win: nTr ? A.wins / nTr : 0, edge: nTr ? A.gross / nTr : 0, fees: A.fees / o.startingCash, makerShare: A.makerN / Math.max(1, 2 * nTr), curve, list: trades };
   }
 
-  // 실시간용: 한 종목의 상태를 한 봉씩 진행 (백테스트와 같은 규칙). 마지막 완성 봉 i에서 호출
-  function liveDecide(F, id, p, i) { return STRATS[id].make(F, p)(i); }
+  // 실시간 모의매매에 쓰는 검증된 설정 (tools/scalp-research.js 2년 롤링 검증의 마지막 구간 선택값)과 백테스트 결과
+  const LIVE = {
+    pull:  { p: { k: 2, m: 4, s: 4, T: 240, longOnly: 1 }, bt: "2년 검증 −100% · 22구간 중 0구간 +" },
+    brk:   { p: { N: 120, flowThr: 0.6, vm: 2, m: 3, s: 4, T: 240, useHtf: 1 }, bt: "2년 검증 −100% · 0/22구간 +" },
+    rev:   { p: { bbK: 3, erMax: 0.15, s: 4, T: 120, longOnly: 1 }, bt: "2년 검증 −100% · 0/22구간 +" },
+    spike: { p: { z: 8, vm: 3, k: 0.5, m: 2, s: 6, T: 15 }, bt: "2년 검증 −50% · 4/22구간 +" },
+    hbrk:  { p: { erThr: 0.3, chN: 48, s: 6, tr: 48 }, bt: "2년 검증 +9.6% (낙폭 −36%) · 9/22구간 + · 하루 0.8회" },
+  };
+  const liveParams = id => ({ ...STRATS[id].defaults, ...LIVE[id].p });
+  // 필요한 1분봉 수 (1시간 흐름 계산용 워밍업 포함)
+  const needBars = (id, p) => id === "spike" ? 400 : Math.max(p.htfN * 3 + p.erLen + 10, (p.chN || 0) + 10) * 60 + 300;
 
-  const Scalp = { STRATS, gridOf, features, align, simulate, liveDecide, trendAt, atr, H, M };
+  const Scalp = { STRATS, LIVE, liveParams, needBars, gridOf, features, align, simulate, makeAccount, stepBar, markEquity, newSymState, trendAt, atr, H, M };
   if (typeof module !== "undefined" && module.exports) module.exports = Scalp;
   else root.Scalp = Scalp;
 })(typeof window !== "undefined" ? window : globalThis);
