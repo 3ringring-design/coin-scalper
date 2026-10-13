@@ -159,6 +159,42 @@ br.buy("X", 100, 1000, 0, 0); assert(Math.abs(br.sell("X", 100, "t", 0).pnl + 1.
   }
 }
 
+// 8) 봉 내부 확인 필터 · 앙상블
+{
+  const base = synthetic(16000, 9);
+  let s2 = 77; const rnd = () => (s2 = (s2 * 1103515245 + 12345) % 2147483648) / 2147483648;
+  base.takerBuy = base.volume.map((v, i) => v * Math.min(0.95, Math.max(0.05, 0.5 + (base.close[i] > base.open[i] ? 0.12 : -0.12) + (rnd() - 0.5) * 0.3)));
+  // 리샘플 합산 · 뒤집힌 차트는 매수↔매도 체결
+  const r15 = Core.resample(base, 3e5, 9e5), m = Core.mirror(base);
+  assert(Math.abs(r15.takerBuy[2] - (base.takerBuy[6] + base.takerBuy[7] + base.takerBuy[8])) < 1e-9);
+  assert(Math.abs(m.takerBuy[5] - (base.volume[5] - base.takerBuy[5])) < 1e-12);
+  // 규칙: 추세형은 매수 우세 + 위쪽 마감, 되돌림형은 직전 매도 우세 + 받아낸 마감
+  const mk = (tb, o, h, l, c) => ({ ts: tb.map((_, i) => i * 3e5), open: o, high: h, low: l, close: c, volume: tb.map(() => 1), takerBuy: tb });
+  const p = { flow: 1, flowThr: 0.55 };
+  const up = mk([0.5, 0.5, 0.5, 0.7], [1, 1, 1, 1], [2, 2, 2, 2], [0, 0, 0, 0], [1, 1, 1, 1.8]);
+  assert.strictEqual(Core.flowOk(up, Core.makeI(up), 3, p, "trend"), true);
+  const weak = mk([0.5, 0.5, 0.5, 0.5], [1, 1, 1, 1], [2, 2, 2, 2], [0, 0, 0, 0], [1, 1, 1, 1.8]);
+  assert.strictEqual(Core.flowOk(weak, Core.makeI(weak), 3, p, "trend"), false);
+  const dump = mk([0.3, 0.35, 0.3, 0.5], [1, 1, 1, 1], [2, 2, 2, 2], [0, 0, 0, 0], [1, 1, 1, 1.2]);
+  assert.strictEqual(Core.flowOk(dump, Core.makeI(dump), 3, p, "revert"), true);
+  assert.strictEqual(Core.flowOk(up, Core.makeI(up), 3, p, "revert"), false);
+  // 필터를 켜면 거래가 줄고, 앙상블은 동의 수를 높일수록 거래가 줄어야 함
+  const c = Core.resample(base, 3e5, 9e5), I = Core.makeI(c), cm = Core.mirror(c), Im = Core.makeI(cm);
+  const F = { ...O, market: "futures", feeRate: 0.0005, slippageBps: 3, dir: "both", I, cm, Im };
+  for (const id of ["pullback", "squeeze", "capitulation", "volbreak"]) {
+    const s = Core.byId(id), p0 = Core.defaults(s);
+    const a = Core.simulate(c, s, p0, F).trades.length, b = Core.simulate(c, s, { ...p0, flow: 1 }, F).trades.length;
+    assert(b <= a + 1, `${id} 봉 내부 필터`);
+  }
+  const ens = Core.byId("ensemble"), pe = Core.defaults(ens);
+  const e1 = Core.simulate(c, ens, { ...pe, votes: 1 }, F), e2 = Core.simulate(c, ens, { ...pe, votes: 2 }, F);
+  assert(e1.trades.length > 0 && e2.trades.length <= e1.trades.length, "앙상블 투표");
+  assert(e1.equity.every(Number.isFinite), "앙상블 NaN");
+  // 대칭성: 뒤집은 차트(= 하락장)에서는 같은 신호가 숏으로 나와야 함
+  const em = Core.simulate(cm, ens, { ...pe, votes: 1 }, { ...F, I: Im, cm: c, Im: I });
+  assert(e1.trades.filter(t => t.dir > 0).length > 0 && em.trades.filter(t => t.dir < 0).length > 0, "앙상블 롱·숏 대칭");
+}
+
 // (선택) 파이썬 결과와 비교
 if (process.argv[2]) {
   const fx = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));

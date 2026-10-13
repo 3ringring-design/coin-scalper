@@ -175,7 +175,13 @@ canvas { display: block; width: 100%; height: 240px; }
           <span class="muted small" id="labCostNote"></span>
         </div>
         <div class="chips" id="labStrats" style="margin-bottom:10px"></div>
-        <div class="row"><label class="chip" title="같은 전략을 시장 상태 필터를 켠 버전으로 한 줄 더 돌려요"><input type="checkbox" id="labFilter"> 시장 상태 필터 버전도 같이 비교 <span class="muted small">(추세형은 추세장에서만 · 되돌림형은 횡보장에서만)</span></label></div>
+        <div class="row"><label class="muted small">필터 비교</label>
+          <select id="labFilter">
+            <option value="none">기본만</option>
+            <option value="regime">기본 + 시장 상태</option>
+            <option value="all">기본 · 시장 상태 · 봉 내부 · 둘 다 (4가지)</option>
+          </select>
+          <span class="muted small">시장 상태: 추세형은 추세장, 되돌림형은 횡보장에서만 · 봉 내부: 체결강도와 마감 위치로 진입 확인</span></div>
         <div class="row" style="margin-bottom:0">
           <button class="btn primary" id="labBtn">연구 시작</button>
           <span class="muted small" id="labInfo">종목은 설정 탭의 종목을 써요.</span>
@@ -356,8 +362,8 @@ async function apiGet(path) {
   throw new Error("바이낸스 접속 실패 (모든 주소) — 마지막 오류: " + lastErr.message);
 }
 function toCandles(rows) {
-  const c = { ts: [], open: [], high: [], low: [], close: [], volume: [] };
-  for (const r of rows) { c.ts.push(r[0]); c.open.push(+r[1]); c.high.push(+r[2]); c.low.push(+r[3]); c.close.push(+r[4]); c.volume.push(+r[5]); }
+  const c = { ts: [], open: [], high: [], low: [], close: [], volume: [], takerBuy: [] };
+  for (const r of rows) { c.ts.push(r[0]); c.open.push(+r[1]); c.high.push(+r[2]); c.low.push(+r[3]); c.close.push(+r[4]); c.volume.push(+r[5]); c.takerBuy.push(r[9] != null ? +r[9] : NaN); }
   return c;
 }
 const klines = (sym, iv, limit, startTime) =>
@@ -459,7 +465,7 @@ async function stepSymbol(sym) {
   if (lastEval[sym] === lastTs) return;   // 캔들 하나당 진입 판단 1회
   lastEval[sym] = lastTs;
   if (lastExit[sym] != null && (lastTs - lastExit[sym]) / tf < +S.cooldownBars) return;
-  const L = longOn && s.entry(c, dL, i, p) && Core.regimeOk(I, i, p), Sg = shortOn && s.entry(cm, dS, i, p) && Core.regimeOk(Im, i, p);
+  const L = longOn && Core.entryOk(s, c, dL, I, i, p), Sg = shortOn && Core.entryOk(s, cm, dS, Im, i, p);
   if (!isN(at[i]) || L === Sg) return;
   if (Object.keys(broker.positions).length >= +S.maxPositions) { log(`${sym} 신호 발생 — 최대 보유 종목 수라 건너뜀`); return; }
   const size = Math.min(broker.equity(prices) * +S.positionPct, broker.cash);
@@ -682,7 +688,7 @@ function renderLabControls() {
   };
   $("labCost").onchange = sync; sync();
   $("labTfs").innerHTML = TFS.map(t => `<label class="chip"><input type="checkbox" value="${t}" ${tfs.includes(t) ? "checked" : ""}>${t}</label>`).join("");
-  $("labFilter").checked = store.get("cs_lab_filter", true);
+  { const fv = store.get("cs_lab_filter", "all"); $("labFilter").value = fv === true ? "regime" : fv === false ? "none" : fv; }
   $("labStrats").innerHTML = Core.STRATEGIES.map(s => `<label class="chip" title="${esc(s.desc)}"><input type="checkbox" value="${s.id}" ${sel.includes(s.id) ? "checked" : ""}>${s.name} <span class="muted small">${Core.grid(s).length}</span></label>`).join("");
 }
 function verdict(r) {
@@ -720,13 +726,19 @@ async function runLab() {
   const plan = foldPlan(mode, days, trainD, testD, now);
   if (!plan.length) { toast("전체 기간이 학습+검증보다 길어야 해요"); return; }
   store.set("cs_lab_tfs", tfs); store.set("cs_lab_strats", ids); store.set("cs_lab_mode", { mode, days, train: trainD, test: testD });
-  const filterOn = $("labFilter").checked; store.set("cs_lab_filter", filterOn);
+  const filterMode = $("labFilter").value; store.set("cs_lab_filter", filterMode);
   const costKey = $("labCost").value, cmode = COST_MODES[costKey], dir = cmode.market === "spot" ? "long" : $("labDir").value;
   store.set("cs_lab_cost", costKey); store.set("cs_lab_dir", dir);
   const rt = 2 * (cmode.fee + cmode.slip / 1e4);
   const strats = ids.map(Core.byId), btn = $("labBtn"),
-        variants = strats.flatMap(s => [{ s, name: s.name, ov: null },
-          ...(filterOn && Core.KIND_REGIME[s.kind] ? [{ s, name: s.name + (s.kind === "trend" ? " +추세장만" : " +횡보장만"), ov: { regime: Core.KIND_REGIME[s.kind] } }] : [])]), prog = $("labProg"), bar = prog.firstElementChild;
+        variants = strats.flatMap(s => {
+          const out = [{ s, name: s.name, ov: null }], R = Core.KIND_REGIME[s.kind], rn = s.kind === "trend" ? " +추세장만" : " +횡보장만";
+          const flowable = s.kind !== "time";
+          if (filterMode !== "none" && R) out.push({ s, name: s.name + rn, ov: { regime: R } });
+          if (filterMode === "all" && flowable) out.push({ s, name: s.name + " +봉내부", ov: { flow: 1 } });
+          if (filterMode === "all" && flowable && R) out.push({ s, name: s.name + rn + " +봉내부", ov: { regime: R, flow: 1 } });
+          return out;
+        }), prog = $("labProg"), bar = prog.firstElementChild;
   const setProg = f => { bar.style.width = (f * 100).toFixed(1) + "%"; };
   labRunning = true; btn.disabled = true; prog.style.display = "block"; setProg(0);
   labRows = [];

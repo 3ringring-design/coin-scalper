@@ -177,6 +177,9 @@
       vwap: n => get("vwap" + n, () => vwap(c, n)),
       rollMinOf: (key, arr, n) => get(`rmin${key},${n}`, () => rollMin(arr, n)),
       er: n => get("er" + n, () => effRatio(c.close, n)),
+      memo: (k, fn) => get("m:" + k, fn),
+      tbr: () => get("tbr", () => c.close.map((_, i) => c.takerBuy && c.volume[i] > 0 ? c.takerBuy[i] / c.volume[i] : NaN)),
+      clv: () => get("clv", () => c.close.map((v, i) => c.high[i] > c.low[i] ? (v - c.low[i]) / (c.high[i] - c.low[i]) : 0.5)),
       day: () => get("day", () => dayInfo(c)),
       season: (L, H) => get(`season${L},${H}`, () => seasonForecast(c, L, H)),
     };
@@ -375,9 +378,54 @@
       },
     },
   ];
-  // 모든 전략 공통: 시장 상태 필터 (0=끔, 1=추세장에서만, 2=횡보장에서만 진입)
+  // ---------------- 상황별 앙상블 ----------------
+  // 시장 상태(효율비율)에 따라 추세형 또는 되돌림형 전략들만 투표 → 최근 memory봉 안에 votes개 이상 신호면 진입.
+  // 각 전략은 기본 설정 그대로 사용 (과거에 끼워 맞출 여지를 줄이기 위해).
+  const ENS_COMPONENTS = ["pullback", "stochrsi", "vwap", "capitulation", "squeeze", "donchian", "macd", "intramom", "volbreak"];
+  STRATEGIES.push({
+    id: "ensemble", name: "상황별 앙상블", kind: "meta",
+    desc: "지금까지의 전략 9개를 한 팀으로 묶어요. 추세장(효율비율 높음)에서는 추세형 5개(스퀴즈·채널·MACD·장중 모멘텀·변동성 돌파)가, 횡보장에서는 되돌림형 4개(눌림목·StochRSI·VWAP·투매 반등)가 투표하고, 최근 몇 봉 안에 여러 전략이 같은 방향으로 동의할 때만 진입해요. 각 전략은 기본 설정 그대로 써요.",
+    params: [X("votes", "최소 동의 전략 수", 2, [1, 2]), X("memory", "신호 유효 기간 (봉)", 3, [1, 3]), X("erThrE", "추세장 기준 (효율비율)", 0.3),
+      ...exitParams({ stop: [1.5, 2.5, 4], take: [2, 4], trail: [0, 3], hold: 48 })],
+    comps: () => ENS_COMPONENTS.map(id => STRATEGIES.find(s => s.id === id)),
+    warmup(p, tf) { return Math.max(...this.comps().map(s => s.warmup(defaults(s), tf)), 60) + p.memory; },
+    prepare(c, p, I) {
+      return I.memo("ensemble", () => {
+        const n = c.ts.length;
+        const sig = this.comps().map(s => {
+          const p0 = defaults(s), d = s.prepare(c, p0, I), a = new Uint8Array(n);
+          for (let i = 0; i < n; i++) { try { a[i] = s.entry(c, d, i, p0) ? 1 : 0; } catch { a[i] = 0; } }
+          return { s, a };
+        });
+        return { er: I.er(48), sig };
+      });
+    },
+    kindAt: (c, d, i, p) => ok(d.er[i]) && d.er[i] >= p.erThrE ? "trend" : "revert",
+    count(c, d, i, p) {
+      const kind = this.kindAt(c, d, i, p), names = [];
+      for (const { s, a } of d.sig) {
+        if (s.kind !== kind) continue;
+        for (let j = Math.max(0, i - p.memory + 1); j <= i; j++) if (a[j]) { names.push(s.name.replace(/ \(.*\)/, "")); break; }
+      }
+      return { kind, names };
+    },
+    entry(c, d, i, p) { return this.count(c, d, i, p).names.length >= p.votes; },
+    view(c, d, i, p) {
+      const { kind, names } = this.count(c, d, i, p);
+      return { info: `${kind === "trend" ? "추세장" : "횡보장"} · ER ${ok(d.er[i]) ? d.er[i].toFixed(2) : "–"} · 동의 ${names.length}`,
+        conds: [c3(kind === "trend" ? "추세장 → 추세형 전략 투표" : "횡보장 → 되돌림형 전략 투표", true),
+                c3(`${p.votes}개 이상 동의${names.length ? ": " + names.join(", ") : ""}`, names.length >= p.votes)] };
+    },
+  });
+
+  // ---------------- 공통 필터 ----------------
+  // ① 시장 상태 (0=끔, 1=추세장에서만, 2=횡보장에서만)
+  // ② 봉 내부 확인 (체결강도 = 시장가 매수 비율, 봉 모양 = 종가가 봉 안에서 어디쯤인지)
+  //    추세형: 신호 봉을 공격적 매수가 밀어 올리고(체결강도 ≥ 기준) 위쪽에서 마감
+  //    되돌림형: 직전 3봉에 공격적 매도가 쏟아졌고(체결강도 ≤ 1−기준) 신호 봉은 매수가 받아내 중간 이상에서 마감
   for (const s of STRATEGIES) s.params.push(
-    X("regime", "시장 상태 필터 (0 끔 · 1 추세장만 · 2 횡보장만)", 0), X("erLen", "추세 판단 기간 (봉)", 48), X("erThr", "추세 기준 (효율비율 0~1)", 0.3));
+    X("regime", "시장 상태 필터 (0 끔 · 1 추세장만 · 2 횡보장만)", 0), X("erLen", "추세 판단 기간 (봉)", 48), X("erThr", "추세 기준 (효율비율 0~1)", 0.3),
+    X("flow", "봉 내부 확인 (0 끔 · 1 켬)", 0), X("flowThr", "체결강도 기준 (시장가 매수 비율)", 0.55));
   const KIND_REGIME = { trend: 1, revert: 2 };
   function regimeOk(I, i, p) {
     if (!p.regime) return true;
@@ -385,14 +433,41 @@
     if (!ok(e)) return false;
     return p.regime === 1 ? e >= p.erThr : e < p.erThr;
   }
-  const warmupOf = (s, p, tf) => Math.max(s.warmup(p, tf), p.regime ? p.erLen + 1 : 0, 1);
-  // 화면용: 전략 조건 + 시장 상태 조건
+  const kindOf = (s, c, d, i, p) => s.kindAt ? s.kindAt(c, d, i, p) : s.kind;
+  function flowParts(c, I, i, p, kind) {
+    const tb = I.tbr(), cl = I.clv();
+    if (!ok(tb[i])) return null;                              // 체결강도 데이터 없음 → 판단 보류(통과)
+    if (kind === "trend") return [tb[i] >= p.flowThr, cl[i] >= 0.6, tb[i]];
+    if (kind === "revert") {
+      let s = 0, n = 0; for (let j = Math.max(0, i - 3); j < i; j++) if (ok(tb[j])) { s += tb[j]; n++; }
+      const avg = n ? s / n : NaN;
+      return [ok(avg) && avg <= 1 - p.flowThr, cl[i] >= 0.5, avg];
+    }
+    return [true, true, tb[i]];
+  }
+  function flowOk(c, I, i, p, kind) {
+    if (!p.flow) return true;
+    const f = flowParts(c, I, i, p, kind);
+    return !f || (f[0] && f[1]);
+  }
+  function entryOk(s, c, d, I, i, p) {
+    return s.entry(c, d, i, p) && regimeOk(I, i, p) && flowOk(c, I, i, p, kindOf(s, c, d, i, p));
+  }
+  const warmupOf = (s, p, tf) => Math.max(s.warmup(p, tf), p.regime ? p.erLen + 1 : 0, p.flow ? 4 : 0, 1);
+  // 화면용: 전략 조건 + 필터 조건
   function viewOf(s, c, d, I, i, p) {
     const v = s.view(c, d, i, p);
     if (p.regime) {
       const e = I.er(p.erLen)[i];
       v.conds = [...v.conds, c3(p.regime === 1 ? `추세장 (ER≥${p.erThr})` : `횡보장 (ER<${p.erThr})`, regimeOk(I, i, p))];
       v.info += ` · ER ${ok(e) ? e.toFixed(2) : "–"}`;
+    }
+    if (p.flow) {
+      const kind = kindOf(s, c, d, i, p), f = flowParts(c, I, i, p, kind);
+      if (!f) v.conds = [...v.conds, c3("체결강도 데이터 없음 (통과)", true)];
+      else if (kind === "trend") v.conds = [...v.conds, c3(`매수 체결강도 ≥ ${p.flowThr * 100}%`, f[0]), c3("봉 위쪽 마감", f[1])];
+      else if (kind === "revert") v.conds = [...v.conds, c3(`직전 매도 체결 우세 (매수 ≤ ${Math.round((1 - p.flowThr) * 100)}%)`, f[0]), c3("매수가 받아낸 마감", f[1])];
+      if (f && ok(f[2])) v.info += ` · 체결 ${(f[2] * 100).toFixed(0)}%`;
     }
     return v;
   }
@@ -408,7 +483,8 @@
   // 가격을 1/가격으로 뒤집으면 하락이 상승처럼 보임 → 같은 롱 전략을 그대로 숏 신호로 사용
   function mirror(c) {
     return { ts: c.ts, open: c.open.map(v => 1 / v), high: c.low.map(v => 1 / v), low: c.high.map(v => 1 / v),
-             close: c.close.map(v => 1 / v), volume: c.volume };
+             close: c.close.map(v => 1 / v), volume: c.volume,
+             ...(c.takerBuy ? { takerBuy: c.takerBuy.map((v, i) => c.volume[i] - v) } : {}) };
   }
 
   // ---------------- 청산 ----------------
@@ -555,7 +631,7 @@
     const equity = [];
     for (let i = from; i < to; i++) {
       if (entryI === null && i - lastExitI > o.cooldownBars && ok(at[i - 1])) {
-        const L = longOn && strat.entry(c, dL, i - 1, p) && regimeOk(I, i - 1, p), S = shortOn && strat.entry(cm, dS, i - 1, p) && regimeOk(Im, i - 1, p);
+        const L = longOn && entryOk(strat, c, dL, I, i - 1, p), S = shortOn && entryOk(strat, cm, dS, Im, i - 1, p);
         if (L !== S) {
           const size = Math.min(b.equity({ [sym]: c.open[i] }) * o.positionPct, b.cash);
           if (size >= (o.minOrder ?? 10)) { b.open(sym, L ? 1 : -1, c.open[i], size, c.ts[i - 1], c.ts[i], { atr: at[i - 1], lev }); entryI = i; }
@@ -594,20 +670,20 @@
   function resample(c, fromMs, toMs) {
     const k = toMs / fromMs;
     if (k === 1) return c;
-    const out = { ts: [], open: [], high: [], low: [], close: [], volume: [] };
+    const out = { ts: [], open: [], high: [], low: [], close: [], volume: [], ...(c.takerBuy ? { takerBuy: [] } : {}) };
     let cur = null, cnt = 0;
     const push = () => { if (cur && cnt === k) for (const f in out) out[f].push(cur[f]); };
     for (let i = 0; i < c.ts.length; i++) {
       const b = Math.floor(c.ts[i] / toMs) * toMs;
-      if (!cur || cur.ts !== b) { push(); cur = { ts: b, open: c.open[i], high: c.high[i], low: c.low[i], close: c.close[i], volume: c.volume[i] }; cnt = 1; }
-      else { cur.high = Math.max(cur.high, c.high[i]); cur.low = Math.min(cur.low, c.low[i]); cur.close = c.close[i]; cur.volume += c.volume[i]; cnt++; }
+      if (!cur || cur.ts !== b) { push(); cur = { ts: b, open: c.open[i], high: c.high[i], low: c.low[i], close: c.close[i], volume: c.volume[i], takerBuy: c.takerBuy ? c.takerBuy[i] : 0 }; cnt = 1; }
+      else { cur.high = Math.max(cur.high, c.high[i]); cur.low = Math.min(cur.low, c.low[i]); cur.close = c.close[i]; cur.volume += c.volume[i]; if (c.takerBuy) cur.takerBuy += c.takerBuy[i]; cnt++; }
     }
     push();
     return out;
   }
 
   const Core = { ema, rma, rsi, sma, bollinger, rollMax, rollMin, atr, macd, stochRsi, adx, vwap, makeI,
-                 STRATEGIES, byId, defaults, grid, regimeOk, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
+                 STRATEGIES, byId, defaults, grid, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
   else root.Core = Core;
 })(typeof window !== "undefined" ? window : globalThis);
