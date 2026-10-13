@@ -7,7 +7,7 @@ const HOSTS = ["https://data-api.binance.vision", "https://api.binance.com", "ht
 const BASE = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const OTHERS = ["BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT", "TRXUSDT", "DOTUSDT"];
 
-// 추천 세팅 v4 (index.html PRESET과 같게 유지)
+// 비교 기준: 추천 세팅 v4 (채널 60 + 눌림목 40). v5는 G 섹션의 '채널만 · 롱만 · 1%'
 const SLOTS = [
   { name: "채널 돌파", strategyId: "donchian", dir: "both", weight: 60, params: { chN: 20, adxMin: 20, stopAtr: 2.5, trailAtr: 8, regime: 1, runner: 1, scaleIn: 1, scaleOut: 1 } },
   { name: "눌림목", strategyId: "pullback", dir: "both", weight: 40, params: { bbStd: 2.5, rsiEntry: 38, stopAtr: 4, takeAtr: 6, bias: 1, scaleIn: 1, scaleOut: 1 } },

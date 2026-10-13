@@ -1225,21 +1225,21 @@ function applyPortfolio(slots, mode, label, opts = {}) {
   if (running) { startTicker(); tick(); }
   return true;
 }
-// v4: 365일 롤링(학습60→검증30 × 10구간, 하락장 포함), 선물 시장가, 롱+숏, 1h, 손절 거리 기준 위험 2% · 자동 레버리지 ≤3배
-//  - 눌림목 반등 +분할 +큰 방향: 7/10구간, 수익÷낙폭 0.53 (큰 방향 없으면 −0.43) — 숏 +4.3% / 롱 −0.8%
-//  - 채널 돌파 +추세장 +러너 +분할: 6/10구간, +9.5%, 수익÷낙폭 0.80 — 롱·숏 모두 +
-//  - 투매 반등·스퀴즈 돌파는 1년 검증에서 탈락해 제외
+// v5: 6년(2020-10~2026-10) 실제 계좌 재현 테스트 (tools/stress.js · GitHub Actions)
+//  - v4(채널+눌림목, 롱+숏, 위험 2%): 연 +8.9%, 최대 낙폭 −65% (2021년 −47%) → 위험이 너무 큼
+//  - 위험 1%보다 키우면 수익은 오히려 줄고 낙폭만 커짐 (2% 연 +8.9% / 3% +4.0% / 4% +3.7%)
+//  - 눌림목은 6년 합계 거의 0 (연 +0.1%), 채널 돌파 숏도 거의 0 (연 −0.1%) → 제외
+//  - 채널 돌파 롱만 · 위험 1%: 연 +11.7%, 최대 낙폭 −21%, 연수익÷낙폭 0.55 (후보 중 최고)
+//  - 다른 코인 9개로 넓히면 대부분 마이너스 → BTC·ETH·SOL 유지
 const PRESET = {
-  version: "v4",
+  version: "v5",
   slots: [
-    { id: "s1", name: "채널 돌파 +추세장 +러너 +분할", strategyId: "donchian", interval: "1h", dir: "both", weight: 60,
-      params: { chN: 20, adxMin: 20, stopAtr: 2.5, trailAtr: 8, regime: 1, runner: 1, scaleIn: 1, scaleOut: 1 }, why: "1년 6/10구간 +, +9.5%, 수익÷낙폭 0.80" },
-    { id: "s2", name: "눌림목 반등 +분할 +큰 방향", strategyId: "pullback", interval: "1h", dir: "both", weight: 40,
-      params: { bbStd: 2.5, rsiEntry: 38, stopAtr: 4, takeAtr: 6, bias: 1, scaleIn: 1, scaleOut: 1 }, why: "1년 7/10구간 +, 수익÷낙폭 0.53, 하락장에서 숏으로 수익" },
+    { id: "s1", name: "채널 돌파 롱 +추세장 +러너 +분할", strategyId: "donchian", interval: "1h", dir: "long", weight: 100,
+      params: { chN: 20, adxMin: 20, stopAtr: 2.5, trailAtr: 8, regime: 1, runner: 1, scaleIn: 1, scaleOut: 1 }, why: "6년 연 +11.7%, 최대 낙폭 −21% (v4는 −65%)" },
   ],
-  settings: { symbols: "BTCUSDT, ETHUSDT, SOLUSDT", leverage: 1, positionPct: 0.5, sizing: "risk", riskPct: 0.02, autoLev: "on", maxLev: 3, cooldownBars: 3, pollSeconds: 15 },
+  settings: { symbols: "BTCUSDT, ETHUSDT, SOLUSDT", leverage: 1, positionPct: 0.5, sizing: "risk", riskPct: 0.01, autoLev: "on", maxLev: 3, cooldownBars: 3, pollSeconds: 15 },
 };
-$("presetVer").textContent = PRESET.version + " · 1년 검증 · 위험 2% · 자동 레버리지";
+$("presetVer").textContent = PRESET.version + " · 6년 검증 · 위험 1% · 자동 레버리지";
 $("presetList").innerHTML = PRESET.slots.map(sl => `<span class="kv" title="${esc(sl.why)}">${esc(sl.name)} · ${sl.interval} · ${sl.weight}%</span>`).join("") +
   `<span class="muted small"> BTC·ETH·SOL</span>`;
 $("presetBtn").onclick = () => {
