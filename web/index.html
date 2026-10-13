@@ -513,8 +513,31 @@ async function stepSlot(sl, sym) {
   log(`${tag}${side > 0 ? "롱" : "숏"} 진입 ${sym} @ ${fmtP(ps.entryPrice)} | ${fmtN(ps.cost)} USDT${ps.lev > 1 ? ` × ${ps.lev}배` : ""}${ps.liq ? ` · 청산가 ${fmtP(ps.liq)}` : ""}${p.scaleIn ? ` · 1차 ${Math.round(p.siFrac * 100)}%` : ""}${isPortfolio() ? "" : ` · ${s.name}`}`, "buy");
 }
 
+// ---------- 탭 잠금: 같은 계좌를 여러 탭이 동시에 매매하지 않도록 (실행 중인 탭이 15초마다 표시) ----------
+const TAB_ID = Math.random().toString(36).slice(2);
+let viewOnly = false;
+const lockOwner = () => { const l = store.get("cs_lock", null); return l && Date.now() - l.t < 60000 ? l.id : null; };
+const otherTabRunning = () => { const o = lockOwner(); return !!o && o !== TAB_ID; };
+const holdLock = () => store.set("cs_lock", { id: TAB_ID, t: Date.now() });
+const releaseLock = () => { if (lockOwner() === TAB_ID) store.del("cs_lock"); };
+function becomeViewer(msg) {
+  stopTicker(); running = false; viewOnly = true;   // 저장된 '실행 중' 상태는 건드리지 않음
+  if (msg) log(msg);
+  renderLive();
+}
+window.addEventListener("pagehide", releaseLock);
+window.addEventListener("storage", e => {
+  if (e.key === "cs_live" && viewOnly && e.newValue) { live = JSON.parse(e.newValue); loadLive(); running = false; renderLive(); }
+  if (e.key === "cs_settings" && e.newValue) {
+    const saved = JSON.parse(e.newValue); for (const k in GENERAL) if (k in saved) S[k] = saved[k];
+    renderSettings(); renderLive(); if (running) startTicker();
+  }
+});
+
 async function tick() {
   if (busy || !running) return;
+  if (otherTabRunning()) { becomeViewer("다른 탭이 실행을 넘겨받았어요 — 이 탭은 보기 전용"); return; }
+  holdLock();
   busy = true;
   try {
     for (const sl of liveSlots()) for (const sym of symbols()) {
@@ -535,6 +558,9 @@ function startTicker() {
 }
 function stopTicker() { if (ticker) { ticker.terminate(); ticker = null; } }
 function setRunning(on) {
+  if (on && otherTabRunning() && !confirm("다른 탭에서 이미 실행 중이에요.\n이 탭으로 옮길까요? (다른 탭은 자동으로 멈춰요)")) return;
+  viewOnly = false;
+  if (on) holdLock(); else releaseLock();
   running = on; saveLive();
   if (on) { log(`모의매매 시작: ${isPortfolio() ? `포트폴리오 ${liveSlots().length}개 전략` : `${strat().name} · ${S.interval}`} · ${marketText()} · ${symbols().join(", ")}`); startTicker(); tick(); }
   else { stopTicker(); log("모의매매 정지"); }
@@ -562,7 +588,7 @@ function renderStratBar() {
 }
 function renderLive() {
   const btn = $("runBtn");
-  btn.textContent = running ? "■ 정지" : "▶ 시작";
+  btn.textContent = running ? "■ 정지" : viewOnly ? "▶ 이 탭에서 실행" : "▶ 시작";
   btn.className = "btn " + (running ? "stop" : "primary");
   const eq = broker.equity(prices), ret = eq / broker.startingCash - 1;
   $("cEq").textContent = fmtN(eq);
@@ -597,7 +623,7 @@ function renderLive() {
   renderStratBar();
 }
 setInterval(() => {
-  if (!running) { $("tickInfo").textContent = "정지됨"; return; }
+  if (!running) { $("tickInfo").textContent = viewOnly ? "👀 다른 탭에서 실행 중 — 이 탭은 보기 전용 (▶ 누르면 이 탭으로 옮겨와요)" : "정지됨"; return; }
   const ago = lastTick ? Math.round((Date.now() - lastTick) / 1000) : null;
   $("tickInfo").textContent = busy ? "시세 확인 중…" : ago == null ? "시작 중…" : `실행 중 · 마지막 확인 ${ago}초 전 · ${S.pollSeconds}초마다`;
 }, 1000);
@@ -1164,7 +1190,10 @@ $("copyBtn").onclick = async () => {
 // ---------------- 시작 ----------------
 $("ver").textContent = BUILD.startsWith("__") ? "로컬 파일" : BUILD;
 renderSettings(); renderLabControls(); renderLog(); renderLive();
-if (running) { log("페이지 다시 열림 — 모의매매 이어서 진행"); startTicker(); tick(); }
+if (running) {
+  if (otherTabRunning()) becomeViewer("다른 탭에서 실행 중이라 이 탭은 보기 전용이에요");
+  else { holdLock(); log("페이지 다시 열림 — 모의매매 이어서 진행"); startTicker(); tick(); }
+}
 })();
 </script>
 </body>
