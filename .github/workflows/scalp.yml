@@ -1,0 +1,38 @@
+name: Scalp research
+
+# 추천 포트폴리오를 여러 해 · 무작위 기간 · 여러 종목에서 돌려봄. 결과는 scalp-result 브랜치에 기록 (Claude가 읽음).
+on:
+  push:
+    branches: [main]
+    paths: ["tools/scalp-research.js", "web/scalp.js", ".github/workflows/scalp.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run
+        id: run
+        run: |
+          set -o pipefail
+          mkdir -p out
+          node --max-old-space-size=6000 tools/scalp-research.js 24 2>&1 | tee out/scalp.txt
+      - name: Publish result
+        if: always()
+        run: |
+          cd out
+          echo "commit: ${{ github.sha }} · run ${{ github.run_number }} · ${{ steps.run.outcome }} · $(date -u +%Y-%m-%dT%H:%M:%SZ)" > meta.txt
+          git init -q -b scalp-result
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -qm "scalp #${{ github.run_number }}"
+          git push -f -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" scalp-result
