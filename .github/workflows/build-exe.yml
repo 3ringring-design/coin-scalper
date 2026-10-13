@@ -1,0 +1,54 @@
+name: Build Windows exe
+
+# main 브랜치에 코드가 올라올 때마다 윈도우 exe를 자동으로 만들어
+# 저장소의 Releases > "latest" 에 올립니다.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Test
+        run: python -m pytest -q
+
+      - name: Build exe
+        run: |
+          pyinstaller --onefile --name CoinScalper --collect-all ccxt --add-data "config.yaml;." run.py
+          pyinstaller --onefile --name Backtest --collect-all ccxt --add-data "config.yaml;." backtest.py
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item dist/CoinScalper.exe, dist/Backtest.exe, config.yaml, .env.example, packaging/README.txt release/
+          Compress-Archive -Path release/* -DestinationPath CoinScalper-windows.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CoinScalper-windows
+          path: CoinScalper-windows.zip
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest CoinScalper-windows.zip \
+            --title "최신 윈도우 실행파일" \
+            --notes "main 브랜치 최신 코드로 자동 빌드됐어요. CoinScalper-windows.zip 을 받아서 압축을 풀고 README.txt 를 보세요."
