@@ -426,7 +426,7 @@
   for (const s of STRATEGIES) s.params.push(
     X("regime", "시장 상태 필터 (0 끔 · 1 추세장만 · 2 횡보장만)", 0), X("erLen", "추세 판단 기간 (봉)", 48), X("erThr", "추세 기준 (효율비율 0~1)", 0.3),
     X("flow", "봉 내부 확인 (0 끔 · 1 켬)", 0), X("flowThr", "체결강도 기준 (시장가 매수 비율)", 0.55),
-    X("scaleIn", "분할 매수 (0 끔 · 1 켬)", 0), X("siFrac", "1차 진입 비중", 0.5), X("siAtr", "2차 진입 간격 (ATR 배수)", 1),
+    X("scaleIn", "분할 매수 (0 끔 · 1 켬)", 0), X("siFrac", "1차 진입 비중", 0.5), X("siAtr", "2차 진입 간격 (ATR 배수)", 1), X("siBoost", "불타기 추가 물량 (계획 대비, 0 = 추가 없음)", 0),
     X("scaleOut", "분할 매도 (0 끔 · 1 켬)", 0), X("soFrac", "1차 익절 비중", 0.5), X("soAtr", "1차 익절 (ATR 배수)", 1.5),
     X("bias", "큰 방향 필터 (0 끔 · 1 켬: 추세선 위면 롱만, 아래면 숏만)", 0), X("biasDays", "큰 방향 추세선 (일)", 30),
     X("runner", "러너 (0 끔 · 1 켬: 분할 익절 후 남은 물량은 추적손절로만)", 0), X("runAtr", "러너 추적손절 (ATR 배수)", 3),
@@ -773,12 +773,12 @@
     const first = p.scaleIn ? size * p.siFrac : size;
     const pos = b.open(key, side, price, first, candleTs, when, extra);
     pos.kind = kind === "revert" ? "revert" : "trend";
-    if (p.scaleIn) pos.reserve = size - first;
+    if (p.scaleIn) pos.reserve = size - first + (pos.kind === "trend" ? size * (p.siBoost || 0) : 0);
     return pos;
   }
   // 진입 신호는 익절·손절·분할 설정과 무관 → 데이터·전략·진입 설정별로 한 번만 계산해서 재사용
   const EXIT_KEYS = new Set(["stopAtr", "takeAtr", "trailAtr", "maxHold", "minExitPct", "stopPct", "takePct",
-    "scaleIn", "siFrac", "siAtr", "scaleOut", "soFrac", "soAtr"]);
+    "scaleIn", "siFrac", "siAtr", "siBoost", "scaleOut", "soFrac", "soAtr"]);
   const entryKey = (strat, p) => strat.id + ":" + Object.keys(p).filter(k => !EXIT_KEYS.has(k)).sort().map(k => k + "=" + p[k]).join(",");
   function entrySignals(strat, c, d, I, p) {
     return I.memo("sig|" + entryKey(strat, p), () => {
@@ -838,6 +838,32 @@
     st.liquidations = b.nLiq || 0;
     return { stats: st, trades: b.trades, equity, start: from };
   }
+  // 계좌 단위 위험 조절 (실시간과 백테스트 공용). 돌려주는 값 = 이번 진입의 위험 비율 (자산 대비)
+  //  volTarget: 지금 변동성(ATR/가격)이 평소보다 크면 위험을 줄이고, 작으면 늘림 (vtMin~vtMax배)
+  //  ddCut: 계좌가 고점 대비 ddCut 이상 빠져 있으면 위험 × ddMult (급락 구간에서 손실 가속 방지)
+  //  heatMax: 열려 있는 포지션들의 손절 시 손실 합계가 자산의 heatMax를 넘지 않게 (같이 움직이는 코인 동시 손절 방지)
+  // 빠른 이동 평균 (앞쪽 NaN은 건너뛰고 시작)
+  function rollMean(x, n) {
+    const out = new Array(x.length).fill(NaN); let sum = 0, cnt = 0;
+    for (let i = 0; i < x.length; i++) {
+      if (ok(x[i])) { sum += x[i]; cnt++; }
+      if (i >= n && ok(x[i - n])) { sum -= x[i - n]; cnt--; }
+      if (cnt >= n * 0.9) out[i] = sum / cnt;
+    }
+    return out;
+  }
+  function riskControl(o, base, eq, peak, positions, volNow, volAvg) {
+    let r = base;
+    if (o.volTarget && ok(volNow) && ok(volAvg) && volNow > 0) r *= Math.min(o.vtMax ?? 1.5, Math.max(o.vtMin ?? 0.5, volAvg / volNow));
+    if (o.ddCut && peak > 0 && eq / peak - 1 < -o.ddCut) r *= o.ddMult ?? 0.5;
+    if (o.heatMax) {
+      let heat = 0;
+      for (const ps of Object.values(positions)) if (!ps.be && ps.riskAmt) heat += ps.riskAmt;
+      r = Math.min(r, Math.max(0, o.heatMax - heat / Math.max(eq, 1e-9)));
+      if (r < base * 0.25) return 0;                       // 남은 한도가 너무 작으면 진입 안 함
+    }
+    return r;
+  }
   // 실제 계좌 재현: 여러 전략(슬롯) × 여러 종목이 한 계좌의 현금을 같이 쓰며 매매 (실시간 모의매매와 같은 규칙)
   // sets: [{ sym, c, I, cm, Im }] 같은 봉 간격. 첫 번째 종목의 시간축을 기준으로 맞춤 (상장 전 구간은 그 종목만 건너뜀)
   // slots: [{ s, p, dir, share }] share = 비중/합계. 위험%는 실시간과 같이 riskPct × share × 슬롯 수
@@ -853,10 +879,12 @@
       const pos = new Map(); d.c.ts.forEach((t, k) => pos.set(t, k));
       runs.push({ key: si + "|" + d.sym, sym: d.sym, c: d.c, s, p, at, dL, dS, cm, idxOf: pos,
         sigL: longOn ? entrySignals(s, d.c, dL, d.I, p) : null, sigS: shortOn ? entrySignals(s, cm, dS, Im, p) : null,
+        volAvg: o.volTarget ? d.I.memo("volAvg|" + (o.volLen || 1440), () => rollMean(at.map((a, k) => a / d.c.close[k]), o.volLen || 1440)) : null,
         warm: warmupOf(s, p, tfOf(d.c)), share: slots[si].share, slotName: slots[si].name, entryI: null, lastExitI: -1e9,
         so: { ...o, positionPct: o.positionPct * slots[si].share, riskPct: (o.riskPct ?? 0.01) * slots[si].share * nSlots } });
     }
     const b = makeBroker(o), from = Math.max(0, o.from ?? 0), to = Math.min(o.to ?? n, n), px = {}, equity = [], maxPos = o.maxPositions ?? Infinity;
+    let peak = o.startingCash;
     for (let t = from; t < to; t++) {
       const T = master.ts[t];
       const idx = runs.map(r => r.idxOf.get(T));
@@ -869,7 +897,8 @@
           const L = !!r.sigL && r.sigL[i - 1] === 1, S = !!r.sigS && r.sigS[i - 1] === 1;
           if (L !== S) {
             const side = L ? 1 : -1, kind = L ? kindOf(r.s, c, r.dL, i - 1, p) : kindOf(r.s, r.cm, r.dS, i - 1, p);
-            const pl = sizePlan(b.equity(px), b.cash, c.open[i], r.at[i - 1], p, r.so, lev, null, 1, side);
+            const eqNow = b.equity(px), rk = riskControl(o, r.so.riskPct ?? 0.01, eqNow, peak, b.positions, r.at[i - 1] / c.close[i - 1], r.volAvg ? r.volAvg[i - 1] : NaN);
+            const pl = rk > 0 ? sizePlan(eqNow, b.cash, c.open[i], r.at[i - 1], p, { ...r.so, riskPct: rk }, lev, null, 1, side) : { amount: 0 };
             if (pl.amount >= (o.minOrder ?? 10)) {
               openPos(b, r.key, side, c.open[i], pl.amount, c.ts[i - 1], c.ts[i], { atr: r.at[i - 1], lev: pl.lev, riskAmt: pl.riskAmt, symbol: r.sym, slotName: r.slotName }, p, kind);
               r.entryI = i;
@@ -887,7 +916,7 @@
         }
       }
       runs.forEach((r, k) => { const i = idx[k]; if (i != null) px[r.sym] = r.c.close[i]; });
-      equity.push(b.equity(px));
+      const e = b.equity(px); equity.push(e); peak = Math.max(peak, e);
     }
     for (const r of runs) if (r.entryI !== null && b.positions[r.key]) b.close(r.key, px[r.sym], "end_of_data", master.ts[to - 1]);
     if (equity.length) equity[equity.length - 1] = b.equity(px);
@@ -956,7 +985,7 @@
   }
 
   const Core = { ema, rma, rsi, sma, bollinger, rollMax, rollMin, atr, macd, stochRsi, adx, vwap, makeI,
-                 STRATEGIES, ACTIVE, byId, defaults, grid, gridValues, WIDE_GRID, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, sizeFor, sizePlan, kellyRisk, biasOk, entrySignals, entryKey, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, simulatePortfolio, randomWindows, spanStats, yearly, stats, resample, ok, FUNDING_MS };
+                 STRATEGIES, ACTIVE, byId, defaults, grid, gridValues, WIDE_GRID, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, sizeFor, sizePlan, kellyRisk, riskControl, biasOk, entrySignals, entryKey, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, simulatePortfolio, randomWindows, spanStats, yearly, stats, resample, ok, FUNDING_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
   else root.Core = Core;
 })(typeof window !== "undefined" ? window : globalThis);
