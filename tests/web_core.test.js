@@ -60,8 +60,9 @@ for (const s of Core.STRATEGIES) {
   assert(Array.isArray(v.conds) && v.conds.length >= 2, `${s.id} view`);
   const split = 6000, full = Core.simulate(c, s, Core.defaults(s), { ...O, I }),
         tr2 = Core.simulate(c, s, Core.defaults(s), { ...O, I, from: split });
-  assert.strictEqual(tr2.start, split); assert(tr2.equity.length === c.close.length - split);
-  assert(full.equity.length > tr2.equity.length);
+  const w = Core.warmupOf(s, Core.defaults(s), Core.tfOf(c)), st0 = Math.max(split, w);
+  assert.strictEqual(tr2.start, st0); assert(tr2.equity.length === c.close.length - st0);
+  assert(full.equity.length >= tr2.equity.length);
 }
 assert(anyTrades > 0);
 
@@ -125,6 +126,37 @@ br.buy("X", 100, 1000, 0, 0); assert(Math.abs(br.sell("X", 100, "t", 0).pnl + 1.
   const d1 = Core.simulate(c, pb, pp, { ...F, dir: "both", leverage: 1 }).stats.maxDrawdown,
         d5 = Core.simulate(c, pb, pp, { ...F, dir: "both", leverage: 5 }).stats.maxDrawdown;
   assert(d5 < d1, "레버리지 낙폭");
+}
+
+// 7) 조사 기반 전략·시장 상태 필터
+{
+  const H = 36e5, D = 864e5;
+  // 효율비율: 일직선 상승 = 1, 왕복 = 0
+  assert.strictEqual(Core.effRatio([1, 2, 3, 4, 5], 4)[4], 1);
+  assert.strictEqual(Core.effRatio([1, 2, 1, 2, 1], 4)[4], 0);
+  // 일봉 정보: 둘째 날 시가·전날 변동폭
+  const mk = rows => ({ ts: rows.map(r => r[0]), open: rows.map(r => r[1]), high: rows.map(r => r[2]), low: rows.map(r => r[3]), close: rows.map(r => r[4]), volume: rows.map(() => 1) });
+  const dd = Core.dayInfo(mk([[0, 10, 12, 9, 11], [12 * H, 11, 15, 10, 14], [D, 14, 14, 13, 13], [D + 12 * H, 13, 16, 12, 15]]));
+  assert.deepStrictEqual([dd.dayOpen[2], dd.dayOpen[3], dd.prevRange[2]], [14, 14, 6]);   // 전날 고 15 − 저 9
+  // 시간대 예측: 매일 UTC 22시에만 +1% 오르는 1시간봉 → 21시 끝 봉에서 다음 1시간 예상 ≈ +1%
+  const rows = []; let px = 100;
+  for (let k = 0; k < 24 * 40; k++) { const t = k * H, o = px; if ((t % D) / H === 22) px *= 1.01; rows.push([t, o, Math.max(o, px), Math.min(o, px), px]); }
+  const cc = mk(rows), f = Core.seasonForecast(cc, 30, 1), at21 = rows.findIndex((r, k) => k > 24 * 35 && (r[0] % D) / H === 21);
+  assert(Math.abs(f[at21] - 0.01) < 1e-9, "시간대 예측");
+  assert(Math.abs(f[at21 + 5]) < 1e-12);
+  // 필터: 같은 전략에 추세장만 켜면 거래 수가 같거나 줄어야 함
+  const c = Core.resample(synthetic(12000, 5), 3e5, 36e5), I = Core.makeI(c);
+  for (const s of Core.STRATEGIES) {
+    const p0 = Core.defaults(s), a = Core.simulate(c, s, p0, { ...O, I }), b = Core.simulate(c, s, { ...p0, regime: 1 }, { ...O, I });
+    assert(b.trades.length <= a.trades.length + 1, `${s.id} 필터`);
+    assert(a.equity.every(Number.isFinite), `${s.id} 1h NaN`);
+  }
+  // 변동성 돌파·장중 모멘텀은 하루 안에 청산 (보유 ≤ 24시간)
+  for (const id of ["volbreak", "intramom"]) {
+    const s = Core.byId(id), r = Core.simulate(c, s, { ...Core.defaults(s), stopAtr: 50 }, { ...O, I, market: "futures", dir: "both" });
+    assert(r.trades.length > 0, `${id} 거래 없음`);
+    assert(r.trades.every(t => t.reason === "end_of_data" || Math.floor((t.exitTime - 1) / D) === Math.floor(t.entryTime / D)), `${id} 하루 넘김`);
+  }
 }
 
 // (선택) 파이썬 결과와 비교

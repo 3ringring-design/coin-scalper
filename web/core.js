@@ -112,6 +112,53 @@
     return out;
   }
 
+  const DAY = 864e5, HOUR = 36e5;
+  const tfOf = c => c.ts.length > 1 ? c.ts[1] - c.ts[0] : HOUR;
+  // 카우프만 효율비율: |N봉 순변화| / N봉 움직임 합. 1에 가까울수록 한 방향 추세, 0에 가까울수록 횡보
+  function effRatio(x, n) {
+    const out = NaNs(x.length);
+    let path = 0;
+    for (let i = 1; i < x.length; i++) {
+      path += Math.abs(x[i] - x[i - 1]);
+      if (i > n) path -= Math.abs(x[i - n] - x[i - n - 1]);
+      if (i >= n) out[i] = path > 0 ? Math.abs(x[i] - x[i - n]) / path : 0;
+    }
+    return out;
+  }
+  // UTC 하루(= 한국 오전 9시 기준) 단위 정보: 오늘 시가, 전날 변동폭, 최근 5일 종가 평균 (모두 과거만 사용)
+  function dayInfo(c) {
+    const n = c.ts.length, dayOpen = NaNs(n), prevRange = NaNs(n), ma5 = NaNs(n), days = [];
+    let cur = null, o, h, l, cl;
+    for (let i = 0; i < n; i++) {
+      const d = Math.floor(c.ts[i] / DAY);
+      if (d !== cur) { if (cur !== null) days.push({ h, l, cl }); cur = d; o = c.open[i]; h = c.high[i]; l = c.low[i]; }
+      dayOpen[i] = o;
+      const pv = days[days.length - 1];
+      if (pv) prevRange[i] = pv.h - pv.l;
+      if (days.length >= 5) { let s = 0; for (let k = days.length - 5; k < days.length; k++) s += days[k].cl; ma5[i] = s / 5; }
+      h = Math.max(h, c.high[i]); l = Math.min(l, c.low[i]); cl = c.close[i];
+    }
+    return { dayOpen, prevRange, ma5 };
+  }
+  // 최근 lookDays일 동안 시간대(UTC)별 1시간 평균 수익률 → 다음 holdH시간 예상 수익 (정각에 끝나는 봉에만 값)
+  function seasonForecast(c, lookDays, holdH) {
+    const n = c.ts.length, tf = tfOf(c), f = NaNs(n);
+    if (tf > HOUR) return f;
+    const bph = Math.round(HOUR / tf), sums = new Array(24).fill(0), cnts = new Array(24).fill(0), q = [];
+    for (let i = 0; i < n; i++) {
+      const end = c.ts[i] + tf;
+      if (end % HOUR !== 0 || i < bph) continue;
+      const h = ((end - HOUR) % DAY) / HOUR, r = c.close[i] / c.close[i - bph] - 1;
+      q.push({ h, r, t: end }); sums[h] += r; cnts[h]++;
+      while (q.length && q[0].t <= end - lookDays * DAY) { const x = q.shift(); sums[x.h] -= x.r; cnts[x.h]--; }
+      const next = (end % DAY) / HOUR;
+      let s = 0, good = true;
+      for (let k = 0; k < holdH; k++) { const hh = (next + k) % 24; if (cnts[hh] < lookDays * 0.6) { good = false; break; } s += sums[hh] / cnts[hh]; }
+      if (good) f[i] = s;
+    }
+    return f;
+  }
+
   // 같은 데이터에서 지표를 한 번만 계산하도록 캐시
   function makeI(c) {
     const m = new Map();
@@ -129,6 +176,9 @@
       adx: n => get("adx" + n, () => adx(c, n)),
       vwap: n => get("vwap" + n, () => vwap(c, n)),
       rollMinOf: (key, arr, n) => get(`rmin${key},${n}`, () => rollMin(arr, n)),
+      er: n => get("er" + n, () => effRatio(c.close, n)),
+      day: () => get("day", () => dayInfo(c)),
+      season: (L, H) => get(`season${L},${H}`, () => seasonForecast(c, L, H)),
     };
   }
 
@@ -148,7 +198,7 @@
 
   const STRATEGIES = [
     {
-      id: "v1", name: "기존 전략 (v1)",
+      id: "v1", kind: "revert", name: "기존 전략 (v1)",
       desc: "상승추세(EMA200 위)에서 볼린저 하단을 깨고 RSI가 과매도일 때 매수. 고정 % 익절·손절. 비교 기준용.",
       params: [X("emaTrend", "추세 EMA", 200), X("bbPeriod", "볼린저 기간", 20), X("bbStd", "볼린저 배수", 2),
         X("rsiPeriod", "RSI 기간", 14), X("rsiEntry", "RSI 진입 (미만)", 35),
@@ -163,7 +213,7 @@
         c3("볼린저 하단 이탈", c.close[i] < d.bb.low[i]), c3(`RSI<${p.rsiEntry}`, d.rsi[i] < p.rsiEntry)] }),
     },
     {
-      id: "pullback", name: "눌림목 반등 (ATR)",
+      id: "pullback", kind: "revert", name: "눌림목 반등 (ATR)",
       desc: "v1과 같은 눌림목 매수지만, 익절·손절을 변동성(ATR)에 맞춰 조절. 변동성이 클 땐 넓게, 작을 땐 좁게.",
       params: [X("emaTrend", "추세 EMA", 200), X("bbPeriod", "볼린저 기간", 20), X("bbStd", "볼린저 배수", 2, [2, 2.5]),
         X("rsiEntry", "RSI 진입 (미만)", 35, [30, 38]), ...exitParams({ stop: [1.5, 2.5, 4], take: [2, 3, 5], hold: 48 })],
@@ -176,7 +226,7 @@
         c3("볼린저 하단 이탈", c.close[i] < d.bb.low[i]), c3(`RSI<${p.rsiEntry}`, d.rsi[i] < p.rsiEntry)] }),
     },
     {
-      id: "squeeze", name: "스퀴즈 돌파",
+      id: "squeeze", kind: "trend", name: "스퀴즈 돌파",
       desc: "볼린저밴드가 최근 가장 좁아진(에너지 응축) 직후, 거래량을 동반해 상단을 뚫으면 매수. 추적손절로 추세를 길게 탐.",
       params: [X("emaTrend", "추세 EMA", 200), X("bbPeriod", "볼린저 기간", 20), X("bbStd", "볼린저 배수", 2),
         X("sqLookback", "스퀴즈 비교 기간 (봉)", 120, [60, 120]), X("volMult", "거래량 배수", 1.5, [1.5, 2]),
@@ -197,7 +247,7 @@
       },
     },
     {
-      id: "donchian", name: "채널 돌파 + ADX",
+      id: "donchian", kind: "trend", name: "채널 돌파 + ADX",
       desc: "최근 N봉 최고가를 돌파하고 ADX로 추세 강도가 확인될 때 매수(터틀 트레이딩 방식). 채널 하단 이탈이나 추적손절로 청산.",
       params: [X("emaTrend", "추세 EMA", 200), X("chN", "채널 기간 (봉)", 20, [20, 48]), X("adxMin", "ADX 최소", 20, [20, 25]),
         ...exitParams({ stop: [1.5, 2.5, 4], trail: [2, 3, 4.5], hold: 144 })],
@@ -210,7 +260,7 @@
         c3("채널 상단 돌파", c.close[i] > d.hh[i]), c3(`ADX>${p.adxMin}`, d.adx.adx[i] > p.adxMin), c3("+DI>−DI", d.adx.pdi[i] > d.adx.mdi[i])] }),
     },
     {
-      id: "stochrsi", name: "정배열 + StochRSI 반전",
+      id: "stochrsi", kind: "revert", name: "정배열 + StochRSI 반전",
       desc: "단기·장기 이동평균이 정배열인 상승장에서, StochRSI가 과매도 구간에서 위로 꺾일 때 매수. 과매수 도달 시 청산.",
       params: [X("emaFast", "단기 EMA", 50, [50, 100]), X("emaTrend", "장기 EMA", 200), X("lvl", "과매도 기준", 20, [20, 30]),
         X("exitLvl", "과매수 청산 기준", 80), ...exitParams({ stop: [1.5, 2.5, 4], take: [2, 3, 5], hold: 72, min: 0.004 })],
@@ -223,7 +273,7 @@
         c3(`K<${p.lvl}`, d.st.k[i - 1] < p.lvl), c3("K↗D 교차", d.st.k[i - 1] <= d.st.d[i - 1] && d.st.k[i] > d.st.d[i])] }),
     },
     {
-      id: "vwap", name: "VWAP 회귀",
+      id: "vwap", kind: "revert", name: "VWAP 회귀",
       desc: "거래량 가중 평균가(VWAP)보다 ATR 몇 배 이상 과하게 빠진 뒤 RSI가 반등을 시작하면 매수. VWAP 복귀 시 청산.",
       params: [X("vwapN", "VWAP 기간 (봉)", 288, [144, 288]), X("dev", "이탈 폭 (ATR 배수)", 2, [1.5, 2.5]), X("rsiLvl", "RSI 과매도", 30, [30, 35]),
         ...exitParams({ stop: [1.5, 2.5, 4], hold: 72, min: 0.004 })],
@@ -236,7 +286,7 @@
         conds: [c3(`VWAP−${p.dev}ATR 이탈`, c.close[i] < d.vw[i] - p.dev * d.atr[i]), c3(`RSI<${p.rsiLvl}`, d.rsi[i - 1] < p.rsiLvl), c3("RSI 반등", d.rsi[i] > d.rsi[i - 1])] }),
     },
     {
-      id: "macd", name: "MACD 반전 + 거래량",
+      id: "macd", kind: "trend", name: "MACD 반전 + 거래량",
       desc: "상승추세 중 MACD가 0선 아래로 눌렸다가 히스토그램이 양으로 돌아서고 거래량이 붙을 때 매수. 히스토그램이 다시 음수면 청산.",
       params: [X("emaTrend", "추세 EMA", 200, [100, 200]), X("volMult", "거래량 배수", 1.5, [1.2, 1.8]),
         ...exitParams({ stop: [1.5, 2.5, 4], take: [2.5, 4, 6], hold: 72, min: 0.004 })],
@@ -249,7 +299,7 @@
         c3("MACD 0선 아래", d.m.line[i] < 0), c3("히스토 양전환", d.m.hist[i - 1] <= 0 && d.m.hist[i] > 0), c3("거래량", c.volume[i] > p.volMult * d.vs[i])] }),
     },
     {
-      id: "capitulation", name: "투매 반등",
+      id: "capitulation", kind: "revert", name: "투매 반등",
       desc: "음봉이 연달아 나오며 ATR 몇 배만큼 급락하고 거래량이 터진 뒤, 첫 양봉이 나오면 짧게 반등을 노림. EMA20 회복 시 청산.",
       params: [X("reds", "연속 음봉 수", 3, [3, 4]), X("dropAtr", "급락 폭 (ATR 배수)", 2, [2, 3]), X("volMult", "거래량 배수", 1.5),
         ...exitParams({ stop: [1, 1.5, 2.5], take: [1.5, 2.5, 4], hold: 36, min: 0.004 })],
@@ -271,12 +321,86 @@
           conds: [c3(`${p.reds}연속 음봉`, a), c3(`급락 ≥${p.dropAtr}ATR`, b), c3("거래량 급증", v), c3("양봉 반전", g)] };
       },
     },
+    // ---------- 조사 기반 전략 (2026-10 추가) ----------
+    {
+      id: "intramom", name: "장중 모멘텀 (논문)", kind: "trend",
+      desc: "Shen·Urquhart·Wang(2022, Financial Review) 연구: 비트코인은 하루 초반의 수익률 방향이 하루 후반에도 이어지는 경향이 있어요. UTC 0시(한국 오전 9시)부터 정한 시각까지 일정 이상 오르면 롱(내리면 숏)으로 들어가서 그날 끝(한국 다음날 오전 9시)에 청산해요.",
+      params: [X("hour", "진입 시각 (UTC 시)", 16, [12, 16, 20]), X("thr", "최소 장중 등락 (0.01=1%)", 0.005, [0.005, 0.015]),
+        ...exitParams({ stop: [2, 4], hold: 999, min: -1 })],
+      warmup: (p, tf) => Math.ceil(2 * DAY / tf) + 20,
+      prepare: (c, p, I) => ({ day: I.day(), tf: tfOf(c) }),
+      entry: (c, d, i, p) => (c.ts[i] + d.tf) % DAY === p.hour * HOUR && c.close[i] / d.day.dayOpen[i] - 1 > p.thr,
+      exit: (c, d, i) => (c.ts[i] + d.tf) % DAY === 0,
+      view(c, d, i, p) {
+        const r = c.close[i] / d.day.dayOpen[i] - 1, left = ((p.hour * HOUR - (c.ts[i] + d.tf) % DAY) + DAY) % DAY / HOUR;
+        return { info: `오늘 ${(r * 100).toFixed(2)}%`, conds: [c3(`오늘 +${(p.thr * 100).toFixed(1)}% 이상`, r > p.thr), c3(`UTC ${p.hour}시 (${left.toFixed(0)}시간 남음)`, left === 0)] };
+      },
+    },
+    {
+      id: "season", name: "시간대 효과 (적응형)", kind: "time",
+      desc: "연구들(Quantpedia 등)에서 비트코인은 특정 시간대(예: UTC 22~23시)에 수익이 몰리는 경향이 보고됐어요. 고정된 시간을 믿지 않고, 최근 N일 동안의 시간대별 평균 수익률을 매시간 다시 계산해서 다음 몇 시간 예상 수익이 기준보다 클 때만 진입해요.",
+      params: [X("lookDays", "학습 기간 (일)", 30, [30, 60]), X("holdH", "보유 시간", 3, [2, 4]), X("thr", "최소 예상 수익", 0.003, [0.002, 0.004]),
+        ...exitParams({ stop: [2, 4], hold: 999, min: -1 })],
+      warmup: (p, tf) => Math.ceil((p.lookDays + 1) * DAY / tf),
+      prepare: (c, p, I) => ({ f: I.season(p.lookDays, p.holdH), tf: tfOf(c) }),
+      entry: (c, d, i, p) => ok(d.f[i]) && d.f[i] > p.thr,
+      exit: (c, d, i, p, pos) => c.ts[i] - pos.entryCandleTs >= p.holdH * HOUR,
+      view(c, d, i, p) {
+        let j = i; while (j > 0 && Number.isNaN(d.f[j]) && i - j < 8) j--;
+        const f = d.f[j];
+        return { info: `다음 ${p.holdH}시간 예상 ${ok(f) ? (f * 100).toFixed(2) + "%" : "–"}`,
+          conds: [c3(`예상 > ${(p.thr * 100).toFixed(1)}%`, ok(f) && f > p.thr), c3("정각", (c.ts[i] + d.tf) % HOUR === 0)] };
+      },
+    },
+    {
+      id: "volbreak", name: "변동성 돌파 (래리 윌리엄스)", kind: "trend",
+      desc: "한국 코인봇에서 가장 유명한 전략이에요. 오늘 시가 + 전날 변동폭 × k를 돌파하면 진입하고, 그날 끝(한국 시간 오전 9시)에 청산해요. 5일 이동평균 위에서만 사는 필터를 켤 수 있어요. 숏은 아래로 돌파할 때.",
+      params: [X("k", "돌파 계수 k", 0.5, [0.3, 0.5, 0.7]), X("maF", "5일선 필터 (1/0)", 1, [0, 1]), ...exitParams({ stop: [2, 4], hold: 999, min: -1 })],
+      warmup: (p, tf) => Math.ceil(7 * DAY / tf),
+      prepare: (c, p, I) => ({ day: I.day(), tf: tfOf(c) }),
+      level: (d, i, p) => d.day.dayOpen[i] + p.k * d.day.prevRange[i],
+      parts(c, d, i, p) {
+        if (i < 1) return [false, false, false];
+        const L = this.level(d, i, p);
+        if (!ok(L)) return [false, false, false];
+        const same = Math.floor(c.ts[i] / DAY) === Math.floor(c.ts[i - 1] / DAY);
+        const cross = c.close[i] > L && (same ? c.close[i - 1] <= L : c.open[i] <= L) && (c.ts[i] + d.tf) % DAY !== 0;
+        return [c.close[i] > L, cross, !p.maF || (ok(d.day.ma5[i]) && d.day.dayOpen[i] > d.day.ma5[i])];
+      },
+      entry(c, d, i, p) { const [, x, m] = this.parts(c, d, i, p); return x && m; },
+      exit: (c, d, i) => (c.ts[i] + d.tf) % DAY === 0,
+      view(c, d, i, p) {
+        const [a, , m] = this.parts(c, d, i, p), L = this.level(d, i, p);
+        return { info: `돌파선까지 ${ok(L) ? ((L / c.close[i] - 1) * 100).toFixed(2) + "%" : "–"}`, conds: [c3("돌파선 위", a), c3("5일선 위", m)] };
+      },
+    },
   ];
+  // 모든 전략 공통: 시장 상태 필터 (0=끔, 1=추세장에서만, 2=횡보장에서만 진입)
+  for (const s of STRATEGIES) s.params.push(
+    X("regime", "시장 상태 필터 (0 끔 · 1 추세장만 · 2 횡보장만)", 0), X("erLen", "추세 판단 기간 (봉)", 48), X("erThr", "추세 기준 (효율비율 0~1)", 0.3));
+  const KIND_REGIME = { trend: 1, revert: 2 };
+  function regimeOk(I, i, p) {
+    if (!p.regime) return true;
+    const e = I.er(p.erLen)[i];
+    if (!ok(e)) return false;
+    return p.regime === 1 ? e >= p.erThr : e < p.erThr;
+  }
+  const warmupOf = (s, p, tf) => Math.max(s.warmup(p, tf), p.regime ? p.erLen + 1 : 0, 1);
+  // 화면용: 전략 조건 + 시장 상태 조건
+  function viewOf(s, c, d, I, i, p) {
+    const v = s.view(c, d, i, p);
+    if (p.regime) {
+      const e = I.er(p.erLen)[i];
+      v.conds = [...v.conds, c3(p.regime === 1 ? `추세장 (ER≥${p.erThr})` : `횡보장 (ER<${p.erThr})`, regimeOk(I, i, p))];
+      v.info += ` · ER ${ok(e) ? e.toFixed(2) : "–"}`;
+    }
+    return v;
+  }
   const byId = id => STRATEGIES.find(s => s.id === id) || STRATEGIES[0];
   const defaults = s => Object.fromEntries(s.params.map(x => [x.k, x.def]));
-  function grid(s) {
-    let combos = [defaults(s)];
-    for (const x of s.params) if (x.grid) combos = combos.flatMap(c => x.grid.map(v => ({ ...c, [x.k]: v })));
+  function grid(s, override) {
+    let combos = [{ ...defaults(s), ...(override || {}) }];
+    for (const x of s.params) if (x.grid && !(override && x.k in override)) combos = combos.flatMap(c => x.grid.map(v => ({ ...c, [x.k]: v })));
     return combos;
   }
 
@@ -424,14 +548,14 @@
     const sym = o.symbol || "SYM", I = o.I || makeI(c), at = I.atr(14), n = c.close.length;
     const fut = o.market === "futures", longOn = !fut || o.dir !== "short", shortOn = fut && (o.dir === "short" || o.dir === "both");
     const dL = longOn ? strat.prepare(c, p, I) : null;
-    const cm = shortOn ? (o.cm || mirror(c)) : null, dS = shortOn ? strat.prepare(cm, p, o.Im || makeI(cm)) : null;
-    const from = Math.max(o.from ?? 0, strat.warmup(p), 1), to = Math.min(o.to ?? n, n);
+    const cm = shortOn ? (o.cm || mirror(c)) : null, Im = shortOn ? (o.Im || makeI(cm)) : null, dS = shortOn ? strat.prepare(cm, p, Im) : null;
+    const from = Math.max(o.from ?? 0, warmupOf(strat, p, tfOf(c))), to = Math.min(o.to ?? n, n);
     const b = makeBroker(o), lev = fut ? Math.max(1, o.leverage || 1) : 1, fr = fut ? (o.fundingRate ?? 0.0001) : 0;
     let entryI = null, lastExitI = -1e9;
     const equity = [];
     for (let i = from; i < to; i++) {
       if (entryI === null && i - lastExitI > o.cooldownBars && ok(at[i - 1])) {
-        const L = longOn && strat.entry(c, dL, i - 1, p), S = shortOn && strat.entry(cm, dS, i - 1, p);
+        const L = longOn && strat.entry(c, dL, i - 1, p) && regimeOk(I, i - 1, p), S = shortOn && strat.entry(cm, dS, i - 1, p) && regimeOk(Im, i - 1, p);
         if (L !== S) {
           const size = Math.min(b.equity({ [sym]: c.open[i] }) * o.positionPct, b.cash);
           if (size >= (o.minOrder ?? 10)) { b.open(sym, L ? 1 : -1, c.open[i], size, c.ts[i - 1], c.ts[i], { atr: at[i - 1], lev }); entryI = i; }
@@ -483,7 +607,7 @@
   }
 
   const Core = { ema, rma, rsi, sma, bollinger, rollMax, rollMin, atr, macd, stochRsi, adx, vwap, makeI,
-                 STRATEGIES, byId, defaults, grid, checkExit, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
+                 STRATEGIES, byId, defaults, grid, regimeOk, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
   else root.Core = Core;
 })(typeof window !== "undefined" ? window : globalThis);
