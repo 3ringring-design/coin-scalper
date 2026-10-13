@@ -195,6 +195,62 @@ br.buy("X", 100, 1000, 0, 0); assert(Math.abs(br.sell("X", 100, "t", 0).pnl + 1.
   assert(e1.trades.filter(t => t.dir > 0).length > 0 && em.trades.filter(t => t.dir < 0).length > 0, "앙상블 롱·숏 대칭");
 }
 
+// 9) 분할 매수 · 분할 매도
+{
+  const near = (a, b, m) => assert(Math.abs(a - b) < 1e-9, `${m}: ${a} vs ${b}`);
+  // 선물 회계: 2배, 100@100 진입 → 100@90 추가 → 절반 110에 익절 → 나머지 100에 청산 (수수료 0)
+  const fb = new Core.FuturesBroker(1000, 0, 0);
+  const pos = fb.open("X", 1, 100, 100, 0, 0, { lev: 2, atr: 5 });
+  fb.add("X", 90, 100);
+  near(pos.qty, 2 + 200 / 90, "수량"); near(pos.entryPrice, 400 / pos.qty, "평단"); near(pos.ref, 100, "손절 기준은 최초가");
+  fb.partial("X", 0.5, 110);
+  const t = fb.close("X", 100, "time_exit", 0);
+  const manual = (pos.qty * 2) / 2 * (110 - 400 / (2 + 200 / 90)) + (2 + 200 / 90) / 2 * (100 - 400 / (2 + 200 / 90));
+  near(t.pnl, manual, "분할 손익"); near(fb.cash, 1000 + manual, "현금"); near(t.cost, 200, "총 투자금");
+  // 수수료 있을 때도 현금 = 시작 + 손익
+  const fb2 = new Core.FuturesBroker(1000, 0.0005, 3);
+  fb2.open("X", -1, 100, 100, 0, 0, { lev: 3, atr: 2 }); fb2.add("X", 103, 80); fb2.fund("X", 102, 0.0001); fb2.partial("X", 0.5, 97);
+  const t2 = fb2.close("X", 99, "take_profit", 0);
+  near(fb2.cash, 1000 + t2.pnl, "선물 현금 일치");
+  const sb = new Core.PaperBroker(1000, 0.001, 5);
+  sb.buy("X", 100, 300, 0, 0, { atr: 2 }); sb.add("X", 97, 200); sb.partial("X", 0.5, 105);
+  const t3 = sb.sell("X", 101, "time_exit", 0);
+  near(sb.cash, 1000 + t3.pnl, "현물 현금 일치"); near(t3.cost, 500, "현물 총 투자금");
+
+  // 손절선 고정: 되돌림형 평단 낮추기 후에도 손절선은 최초가 − 2ATR
+  const p = { stopAtr: 2, takeAtr: 0, trailAtr: 0, maxHold: 99, minExitPct: 0, scaleIn: 1, siFrac: 0.5, siAtr: 1, scaleOut: 1, soFrac: 0.5, soAtr: 1.5 };
+  const b3 = new Core.FuturesBroker(1000, 0, 0);
+  const ps = Core.openPos(b3, "X", 1, 100, 200, 0, 0, { atr: 2, lev: 1 }, p, "revert");
+  near(ps.margin, 100, "1차 50%"); near(ps.reserve, 100, "예약 50%");
+  assert(Core.scaleInStep(b3, "X", ps, 101, 97.9, p)); near(b3.positions.X.entryPrice, 200 / (1 + 100 / 98), "추가 진입가 98");
+  assert.strictEqual(Core.checkExit(ps, 99, 96.1, 97, 1, false, p), null);              // 손절 96에 안 닿음
+  assert.strictEqual(Core.checkExit(ps, 99, 95.9, 97, 2, false, p).reason, "stop_loss");
+  // 분할 매도 후 남은 물량은 본전 손절
+  const b4 = new Core.FuturesBroker(1000, 0, 0);
+  const p4 = { ...p, scaleIn: 0 }, ps4 = Core.openPos(b4, "X", 1, 100, 200, 0, 0, { atr: 2, lev: 1 }, p4, "trend");
+  assert(Core.scaleOutStep(b4, "X", ps4, 103.1, 100.5, p4, 0));                          // 100 + 1.5×2 = 103
+  assert.strictEqual(Core.checkExit(ps4, 101, 99.9, 100, 3, false, p4).reason, "breakeven");
+  // 불타기: 추가 후 최악 손실이 처음 계획(전량 × 2ATR)을 넘지 않음
+  const p5 = { ...p, scaleOut: 0 }, b5 = new Core.FuturesBroker(1000, 0, 0), ps5 = Core.openPos(b5, "X", 1, 100, 200, 0, 0, { atr: 2, lev: 1 }, p5, "trend");
+  assert(Core.scaleInStep(b5, "X", ps5, 102.1, 100, p5), "불타기 추가");
+  const stopNow = ps5.ref - 2 * 2, worst = ps5.qty * (stopNow - ps5.entryPrice);
+  assert(worst >= -200 * 4 / 100 - 1e-9 && worst < -7.5, `불타기 최악 손실 ≤ 계획: ${worst}`);
+
+  // 시뮬레이션: 옵션을 켜도 사실상 꺼진 설정이면 결과 동일 (siFrac=1, soAtr=1000)
+  const c = Core.resample(synthetic(15000, 13), 3e5, 9e5), I = Core.makeI(c), cm = Core.mirror(c), Im = Core.makeI(cm);
+  const F = { ...O, market: "futures", feeRate: 0.0005, slippageBps: 3, dir: "both", I, cm, Im };
+  for (const id of ["capitulation", "pullback", "donchian", "v1"]) {
+    const s = Core.byId(id), p0 = Core.defaults(s), a = Core.simulate(c, s, p0, F);
+    const z = Core.simulate(c, s, { ...p0, scaleIn: 1, siFrac: 1, scaleOut: 1, soAtr: 1000 }, F);
+    assert.strictEqual(z.trades.length, a.trades.length, `${id} 꺼진 분할 = 기본`);
+    near(z.stats.totalReturn, a.stats.totalReturn, `${id} 수익률 동일`);
+    for (const v of [{ scaleIn: 1 }, { scaleOut: 1 }, { scaleIn: 1, scaleOut: 1 }]) {
+      const r = Core.simulate(c, s, { ...p0, ...v }, { ...F, leverage: 3 });
+      assert(r.equity.every(x => Number.isFinite(x) && x >= 0), `${id} 분할 NaN`);
+    }
+  }
+}
+
 // (선택) 파이썬 결과와 비교
 if (process.argv[2]) {
   const fx = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));

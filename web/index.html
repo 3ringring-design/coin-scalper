@@ -189,7 +189,12 @@ canvas { display: block; width: 100%; height: 240px; }
             <option value="regime">기본 + 시장 상태</option>
             <option value="all">기본 · 시장 상태 · 봉 내부 · 둘 다 (4가지)</option>
           </select>
-          <span class="muted small">시장 상태: 추세형은 추세장, 되돌림형은 횡보장에서만 · 봉 내부: 체결강도와 마감 위치로 진입 확인</span></div>
+          <label class="muted small" style="margin-left:8px">분할 비교</label>
+          <select id="labSplit">
+            <option value="none">안 함</option>
+            <option value="all">기본 · 분할 매수 · 분할 매도 · 둘 다 (4가지)</option>
+          </select>
+          <span class="muted small">시장 상태: 추세형은 추세장, 되돌림형은 횡보장에서만 · 봉 내부: 체결강도와 마감 위치로 진입 확인 · 분할: 총 투자금·최초 손절선은 그대로</span></div>
         <div class="row" style="margin-bottom:0">
           <button class="btn primary" id="labBtn">연구 시작</button>
           <span class="muted small" id="labInfo">종목은 설정 탭의 종목을 써요.</span>
@@ -332,7 +337,7 @@ const fmtPF = x => x === Infinity ? "∞" : isN(x) ? x.toFixed(2) : "–";
 const cls = x => x > 0 ? "up" : x < 0 ? "down" : "";
 const fmtT = ts => new Date(ts).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 const REASON = { stop_loss: "손절", trail_stop: "추적손절", take_profit: "익절", signal_exit: "신호 청산", mid_band: "중심선 복귀",
-                 time_exit: "시간 청산", end_of_data: "기간 종료", liquidation: "💥강제청산" };
+                 time_exit: "시간 청산", end_of_data: "기간 종료", liquidation: "💥강제청산", breakeven: "본전 청산" };
 const sideText = t => t.dir < 0 ? `<span class="down">숏</span>` : `<span class="up">롱</span>`;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const paramText = (s, p, onlyGrid) => s.params.filter(x => !onlyGrid || x.grid).map(x => `${x.label.replace(/ \(.*\)/, "")} ${p[x.k]}`).join(" · ");
@@ -479,7 +484,13 @@ async function stepSlot(sl, sym) {
     }
     const bars = Math.floor((lastTs - pos.entryCandleTs) / tf);
     const sig = !s.exit ? false : (pos.dir || 1) > 0 ? s.exit(c, dL, i, p, pos) : (dS ? s.exit(cm, dS, i, p, pos) : false);
+    const add = Core.scaleInStep(broker, key, pos, price, price, p);
+    if (add) log(`${tag}${pos.dir < 0 ? "숏" : "롱"} 2차 진입 ${sym} @ ${fmtP(add.price)} → 평단 ${fmtP(pos.entryPrice)}`, "buy");
     const r = Core.checkExit(pos, price, price, price, bars, sig, p);
+    if (!r) {
+      const part = Core.scaleOutStep(broker, key, pos, price, price, p, Date.now());
+      if (part) log(`${tag}${pos.dir < 0 ? "숏" : "롱"} 1차 익절 ${sym} ${Math.round(p.soFrac * 100)}% @ ${fmtP(part.price)} → 남은 물량 본전 손절`, "sell");
+    }
     if (r) {
       const t = broker.close(key, r.reason === "liquidation" ? pos.liq : price, r.reason, Date.now());
       lastExit[key] = lastTs;
@@ -496,9 +507,10 @@ async function stepSlot(sl, sym) {
   const totalW = liveSlots().reduce((a, x) => a + (+x.weight || 0), 0) || 1;
   const size = Math.min(broker.equity(prices) * ((+sl.weight || 0) / totalW) * +S.positionPct, broker.cash);
   if (size < +S.minOrder) { log(`${tag}${sym} 신호 발생 — 현금 부족`); return; }
-  const side = L ? 1 : -1, ps = broker.open(key, side, price, size, lastTs, Date.now(),
-    { atr: at[i], strategy: s.id, lev: liveLev(), symbol: sym, slotName: isPortfolio() ? sl.name : undefined });
-  log(`${tag}${side > 0 ? "롱" : "숏"} 진입 ${sym} @ ${fmtP(ps.entryPrice)} | ${fmtN(ps.cost)} USDT${ps.lev > 1 ? ` × ${ps.lev}배` : ""}${ps.liq ? ` · 청산가 ${fmtP(ps.liq)}` : ""}${isPortfolio() ? "" : ` · ${s.name}`}`, "buy");
+  const side = L ? 1 : -1, kind = L ? Core.kindOf(s, c, dL, i, p) : Core.kindOf(s, cm, dS, i, p);
+  const ps = Core.openPos(broker, key, side, price, size, lastTs, Date.now(),
+    { atr: at[i], strategy: s.id, lev: liveLev(), symbol: sym, slotName: isPortfolio() ? sl.name : undefined }, p, kind);
+  log(`${tag}${side > 0 ? "롱" : "숏"} 진입 ${sym} @ ${fmtP(ps.entryPrice)} | ${fmtN(ps.cost)} USDT${ps.lev > 1 ? ` × ${ps.lev}배` : ""}${ps.liq ? ` · 청산가 ${fmtP(ps.liq)}` : ""}${p.scaleIn ? ` · 1차 ${Math.round(p.siFrac * 100)}%` : ""}${isPortfolio() ? "" : ` · ${s.name}`}`, "buy");
 }
 
 async function tick() {
@@ -580,7 +592,7 @@ function renderLive() {
   $("tradeTbl").innerHTML = tr.length
     ? `<tr>${multi ? "<th>전략</th>" : ""}<th>종목</th><th>방향</th><th>진입</th><th>청산</th><th>진입가</th><th>청산가</th><th>손익</th><th>수익률</th><th>사유</th></tr>` +
       tr.map(t => `<tr>${multi ? `<td class="name l">${esc(t.slotName || "–")}</td>` : ""}<td>${t.sym || t.symbol}</td><td>${sideText(t)}${(t.lev || 1) > 1 ? ` ×${t.lev}` : ""}</td><td>${fmtT(t.entryTime)}</td><td>${fmtT(t.exitTime)}</td><td>${fmtP(t.entryPrice)}</td>
-        <td>${fmtP(t.exitPrice)}</td><td class="${cls(t.pnl)}">${fmtN(t.pnl)}</td><td class="${cls(t.pnl)}">${fmtPct(t.pnlPct)}</td><td>${REASON[t.reason] || t.reason}</td></tr>`).join("")
+        <td>${fmtP(t.exitPrice)}</td><td class="${cls(t.pnl)}">${fmtN(t.pnl)}</td><td class="${cls(t.pnl)}">${fmtPct(t.pnlPct)}</td><td>${REASON[t.reason] || t.reason}${t.scaled ? ` <span class="muted" title="+ 분할 매수 · ½ 분할 매도">${t.scaled}</span>` : ""}</td></tr>`).join("")
     : `<tr><td class="empty">아직 거래가 없어요. 1시간봉 전략은 조건이 맞을 때까지 반나절~하루 걸릴 수도 있어요.</td></tr>`;
   renderStratBar();
 }
@@ -733,6 +745,7 @@ function renderLabControls() {
   $("labCost").onchange = sync; sync();
   $("labTfs").innerHTML = TFS.map(t => `<label class="chip"><input type="checkbox" value="${t}" ${tfs.includes(t) ? "checked" : ""}>${t}</label>`).join("");
   { const fv = store.get("cs_lab_filter", "all"); $("labFilter").value = fv === true ? "regime" : fv === false ? "none" : fv; }
+  $("labSplit").value = store.get("cs_lab_split", "none");
   $("labStrats").innerHTML = Core.STRATEGIES.map(s => `<label class="chip" title="${esc(s.desc)}"><input type="checkbox" value="${s.id}" ${sel.includes(s.id) ? "checked" : ""}>${s.name} <span class="muted small">${Core.grid(s).length}</span></label>`).join("");
 }
 function verdict(r) {
@@ -771,6 +784,8 @@ async function runLab() {
   if (!plan.length) { toast("전체 기간이 학습+검증보다 길어야 해요"); return; }
   store.set("cs_lab_tfs", tfs); store.set("cs_lab_strats", ids); store.set("cs_lab_mode", { mode, days, train: trainD, test: testD });
   const filterMode = $("labFilter").value; store.set("cs_lab_filter", filterMode);
+  const splitMode = $("labSplit").value; store.set("cs_lab_split", splitMode);
+  const SPLITS = splitMode === "all" ? [["", null], [" +분할매수", { scaleIn: 1 }], [" +분할매도", { scaleOut: 1 }], [" +분할매수·매도", { scaleIn: 1, scaleOut: 1 }]] : [["", null]];
   const costKey = $("labCost").value, cmode = COST_MODES[costKey], dir = cmode.market === "spot" ? "long" : $("labDir").value;
   store.set("cs_lab_cost", costKey); store.set("cs_lab_dir", dir);
   const rt = 2 * (cmode.fee + cmode.slip / 1e4);
@@ -781,7 +796,7 @@ async function runLab() {
           if (filterMode !== "none" && R) out.push({ s, name: s.name + rn, ov: { regime: R } });
           if (filterMode === "all" && flowable) out.push({ s, name: s.name + " +봉내부", ov: { flow: 1 } });
           if (filterMode === "all" && flowable && R) out.push({ s, name: s.name + rn + " +봉내부", ov: { regime: R, flow: 1 } });
-          return out;
+          return out.flatMap(v => SPLITS.map(([sn, so]) => ({ s: v.s, name: v.name + sn, ov: v.ov || so ? { ...(v.ov || {}), ...(so || {}) } : null })));
         }), prog = $("labProg"), bar = prog.firstElementChild;
   const setProg = f => { bar.style.width = (f * 100).toFixed(1) + "%"; };
   labRunning = true; btn.disabled = true; prog.style.display = "block"; setProg(0);

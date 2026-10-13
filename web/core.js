@@ -425,7 +425,9 @@
   //    되돌림형: 직전 3봉에 공격적 매도가 쏟아졌고(체결강도 ≤ 1−기준) 신호 봉은 매수가 받아내 중간 이상에서 마감
   for (const s of STRATEGIES) s.params.push(
     X("regime", "시장 상태 필터 (0 끔 · 1 추세장만 · 2 횡보장만)", 0), X("erLen", "추세 판단 기간 (봉)", 48), X("erThr", "추세 기준 (효율비율 0~1)", 0.3),
-    X("flow", "봉 내부 확인 (0 끔 · 1 켬)", 0), X("flowThr", "체결강도 기준 (시장가 매수 비율)", 0.55));
+    X("flow", "봉 내부 확인 (0 끔 · 1 켬)", 0), X("flowThr", "체결강도 기준 (시장가 매수 비율)", 0.55),
+    X("scaleIn", "분할 매수 (0 끔 · 1 켬)", 0), X("siFrac", "1차 진입 비중", 0.5), X("siAtr", "2차 진입 간격 (ATR 배수)", 1),
+    X("scaleOut", "분할 매도 (0 끔 · 1 켬)", 0), X("soFrac", "1차 익절 비중", 0.5), X("soAtr", "1차 익절 (ATR 배수)", 1.5));
   const KIND_REGIME = { trend: 1, revert: 2 };
   function regimeOk(I, i, p) {
     if (!p.regime) return true;
@@ -491,24 +493,28 @@
   // 한 봉에서 손절·익절 동시 도달 시 보수적으로 손절. 추적손절은 이전 봉까지의 최고(숏은 최저)가 기준.
   // 선물 포지션은 강제청산가(pos.liq)가 손절가보다 먼저 닿으면 강제청산.
   function checkExit(pos, high, low, close, barsHeld, signal, p) {
-    const d = pos.dir || 1, e = pos.entryPrice, a = pos.atr, mx = p.minExitPct || 0;
+    // 손절선은 최초 진입가(pos.ref) 기준으로 고정 → 분할 매수로 평단이 바뀌어도 손절선은 그대로.
+    // 분할 매도 후(pos.be)에는 손절선을 평단(본전)까지 올림. 익절·신호 청산은 평단 기준.
+    const d = pos.dir || 1, e = pos.entryPrice, a = pos.atr, mx = p.minExitPct || 0, sref = pos.ref ?? e;
     let r = null;
     if (d > 0) {
-      const init = p.stopPct != null ? e * (1 - p.stopPct) : e - p.stopAtr * a;
+      let init = p.stopPct != null ? sref * (1 - p.stopPct) : sref - p.stopAtr * a;
+      if (pos.be) init = Math.max(init, e);
       const stop = p.trailAtr > 0 ? Math.max(init, pos.highest - p.trailAtr * a) : init;
       const take = p.takePct != null ? e * (1 + p.takePct) : p.takeAtr > 0 ? e + p.takeAtr * a : Infinity;
       if (pos.liq != null && pos.liq > stop && low <= pos.liq) r = { reason: "liquidation", price: pos.liq };
-      else if (low <= stop) r = { reason: stop > init ? "trail_stop" : "stop_loss", price: stop };
+      else if (low <= stop) r = { reason: stop > init ? "trail_stop" : pos.be && stop === e ? "breakeven" : "stop_loss", price: stop };
       else if (high >= take) r = { reason: "take_profit", price: take };
       else if (signal && close >= e * (1 + mx)) r = { reason: "signal_exit", price: close };
       else if (barsHeld >= p.maxHold) r = { reason: "time_exit", price: close };
       if (!r) pos.highest = Math.max(pos.highest, high);
     } else {
-      const init = p.stopPct != null ? e * (1 + p.stopPct) : e + p.stopAtr * a;
+      let init = p.stopPct != null ? sref * (1 + p.stopPct) : sref + p.stopAtr * a;
+      if (pos.be) init = Math.min(init, e);
       const stop = p.trailAtr > 0 ? Math.min(init, pos.lowest + p.trailAtr * a) : init;
       const take = p.takePct != null ? e * (1 - p.takePct) : p.takeAtr > 0 ? e - p.takeAtr * a : -Infinity;
       if (pos.liq != null && pos.liq < stop && high >= pos.liq) r = { reason: "liquidation", price: pos.liq };
-      else if (high >= stop) r = { reason: stop < init ? "trail_stop" : "stop_loss", price: stop };
+      else if (high >= stop) r = { reason: stop < init ? "trail_stop" : pos.be && stop === e ? "breakeven" : "stop_loss", price: stop };
       else if (low <= take) r = { reason: "take_profit", price: take };
       else if (signal && close <= e * (1 - mx)) r = { reason: "signal_exit", price: close };
       else if (barsHeld >= p.maxHold) r = { reason: "time_exit", price: close };
@@ -516,6 +522,36 @@
     }
     return r;
   }
+
+  // ---------------- 분할 매수 · 분할 매도 ----------------
+  // 분할 매수: 처음엔 siFrac만 진입하고 나머지는 예약.
+  //   되돌림형 → 더 유리한 가격(최초가 −siAtr×ATR, 단 손절선까지 거리의 절반 안쪽)에서 추가 (평단 낮추기)
+  //   추세형   → 맞는 방향으로 siAtr×ATR 가면 추가 (불타기). 이때 손절 기준을 올려서 최악 손실이 처음 계획과 같게 유지.
+  function scaleInStep(b, key, pos, high, low, p) {
+    if (!p.scaleIn || pos.added || !(pos.reserve > 0)) return null;
+    const d = pos.dir || 1, a = pos.atr, ref = pos.ref ?? pos.entryPrice;
+    const stopDist = p.stopPct != null ? ref * p.stopPct : p.stopAtr * a;
+    let lvl, hit;
+    if (pos.kind === "revert") { lvl = ref - d * Math.min(p.siAtr * a, 0.5 * stopDist); hit = d > 0 ? low <= lvl : high >= lvl; }
+    else { lvl = ref + d * p.siAtr * a; hit = d > 0 ? high >= lvl : low <= lvl; }
+    if (!hit) return null;
+    const amt = Math.min(pos.reserve, b.cash);
+    pos.reserve = 0; pos.added = true;
+    if (amt <= 0) return null;
+    b.add(key, lvl, amt);
+    if (pos.kind !== "revert") pos.ref = ref + d * (1 - p.siFrac) * p.siAtr * a;
+    return { price: lvl };
+  }
+  // 분할 매도: 평단 대비 soAtr×ATR 수익에서 soFrac만큼 익절, 남은 물량은 손절선을 본전으로
+  function scaleOutStep(b, key, pos, high, low, p, when) {
+    if (!p.scaleOut || pos.partialDone) return null;
+    const d = pos.dir || 1, lvl = pos.entryPrice + d * p.soAtr * pos.atr;
+    if (!(d > 0 ? high >= lvl : low <= lvl)) return null;
+    b.partial(key, p.soFrac, lvl, when);
+    pos.partialDone = true; pos.be = true;
+    return { price: lvl };
+  }
+  const exitAvg = (pos, price) => { const xq = pos.xQty || 0; return xq ? ((pos.xVal || 0) + pos.qty * price) / (xq + pos.qty) : price; };
 
   // ---------------- 현물 모의 브로커 (롱 전용) ----------------
   class PaperBroker {
@@ -531,19 +567,37 @@
       quote = Math.min(quote, this.cash);
       const fill = price * (1 + this.slip), fee = quote * this.feeRate, qty = (quote - fee) / fill;
       this.cash -= quote;
-      const pos = { dir: 1, lev: 1, qty, entryPrice: fill, rawEntry: price, cost: quote, entryTime: when, entryCandleTs: candleTs, highest: fill, ...extra };
+      const pos = { dir: 1, lev: 1, qty, entryPrice: fill, rawEntry: price, cost: quote, costTotal: quote, entryTime: when, entryCandleTs: candleTs, highest: fill, ...extra };
+      if (pos.ref == null) pos.ref = fill;
       this.positions[symbol] = pos;
       return pos;
+    }
+    add(symbol, price, quote) {
+      const pos = this.positions[symbol];
+      quote = Math.min(quote, this.cash);
+      const fill = price * (1 + this.slip), q = (quote - quote * this.feeRate) / fill;
+      this.cash -= quote;
+      pos.entryPrice = (pos.qty * pos.entryPrice + q * fill) / (pos.qty + q);
+      pos.rawEntry = (pos.qty * pos.rawEntry + q * price) / (pos.qty + q);
+      pos.qty += q; pos.cost += quote; pos.costTotal = (pos.costTotal ?? 0) + quote;
+    }
+    partial(symbol, frac, price) {
+      const pos = this.positions[symbol], q = pos.qty * frac, fill = price * (1 - this.slip);
+      const proceeds = q * fill * (1 - this.feeRate), basis = pos.cost * frac;
+      this.cash += proceeds;
+      pos.qty -= q; pos.cost -= basis; pos.pnlAcc = (pos.pnlAcc || 0) + proceeds - basis;
+      pos.xQty = (pos.xQty || 0) + q; pos.xVal = (pos.xVal || 0) + q * price;
     }
     sell(symbol, price, reason, when) {
       const pos = this.positions[symbol]; delete this.positions[symbol];
       const fill = price * (1 - this.slip), gross = pos.qty * fill, proceeds = gross - gross * this.feeRate;
       this.cash += proceeds;
-      const pnl = proceeds - pos.cost;
+      const pnl = proceeds - pos.cost + (pos.pnlAcc || 0), base = pos.costTotal ?? pos.cost;
       this.nTrades++; if (pnl > 0) this.nWins++; this.realizedPnl += pnl;
       const t = { symbol, dir: 1, lev: 1, entryTime: pos.entryTime, exitTime: when, entryPrice: pos.entryPrice, exitPrice: fill,
-                  qty: pos.qty, cost: pos.cost, proceeds, pnl, pnlPct: pnl / pos.cost, reason,
-                  grossPct: pos.rawEntry ? price / pos.rawEntry - 1 : NaN, sym: pos.symbol, slotName: pos.slotName };
+                  qty: pos.qty, cost: base, proceeds, pnl, pnlPct: pnl / base, reason,
+                  grossPct: pos.rawEntry ? exitAvg(pos, price) / pos.rawEntry - 1 : NaN, sym: pos.symbol, slotName: pos.slotName,
+                  scaled: (pos.added ? "+" : "") + (pos.partialDone ? "½" : "") };
       this.trades.push(t);
       return t;
     }
@@ -569,16 +623,37 @@
       const { market, startingCash, cash, positions, nTrades, nWins, realizedPnl, nLiq } = this;
       return { market, startingCash, cash, positions, trades: this.trades.slice(-500), nTrades, nWins, realizedPnl, nLiq };
     }
+    liqOf(pos) { return pos.lev > 1 ? (pos.dir > 0 ? pos.entryPrice * (1 - 1 / pos.lev + this.mmr) : pos.entryPrice * (1 + 1 / pos.lev - this.mmr)) : null; }
     open(symbol, dir, price, margin, candleTs, when, extra = {}) {
       const lev = Math.max(1, extra.lev || 1);
       margin = Math.min(margin, this.cash / (1 + lev * this.feeRate));
       const fill = price * (1 + dir * this.slip), notional = margin * lev, qty = notional / fill, fee = notional * this.feeRate;
       this.cash -= margin + fee;
-      const liq = dir > 0 ? fill * (1 - 1 / lev + this.mmr) : fill * (1 + 1 / lev - this.mmr);
-      const pos = { ...extra, dir, lev, qty, entryPrice: fill, rawEntry: price, margin, notional, cost: margin, openFee: fee, funding: 0,
-                    liq: lev > 1 ? liq : null, entryTime: when, entryCandleTs: candleTs, highest: fill, lowest: fill };
+      const pos = { ...extra, dir, lev, qty, entryPrice: fill, rawEntry: price, margin, notional, cost: margin, costTotal: margin, openFee: fee, funding: 0,
+                    entryTime: when, entryCandleTs: candleTs, highest: fill, lowest: fill };
+      if (pos.ref == null) pos.ref = fill;
+      pos.liq = this.liqOf(pos);
       this.positions[symbol] = pos;
       return pos;
+    }
+    add(symbol, price, margin) {
+      const pos = this.positions[symbol], lev = pos.lev;
+      margin = Math.min(margin, this.cash / (1 + lev * this.feeRate));
+      const fill = price * (1 + pos.dir * this.slip), notional = margin * lev, q = notional / fill, fee = notional * this.feeRate;
+      this.cash -= margin + fee;
+      pos.entryPrice = (pos.qty * pos.entryPrice + q * fill) / (pos.qty + q);
+      pos.rawEntry = (pos.qty * pos.rawEntry + q * price) / (pos.qty + q);
+      pos.qty += q; pos.margin += margin; pos.notional += notional; pos.openFee += fee; pos.cost = pos.margin; pos.costTotal = (pos.costTotal ?? 0) + margin;
+      pos.liq = this.liqOf(pos);
+    }
+    partial(symbol, frac, price) {
+      const pos = this.positions[symbol], q = pos.qty * frac, fill = price * (1 - pos.dir * this.slip);
+      const gross = pos.dir * q * (fill - pos.entryPrice), fee = q * fill * this.feeRate;
+      const mPart = pos.margin * frac, fPart = pos.funding * frac, ofPart = pos.openFee * frac;
+      this.cash += mPart + gross - fee - fPart;
+      pos.pnlAcc = (pos.pnlAcc || 0) + gross - fee - ofPart - fPart;
+      pos.qty -= q; pos.margin -= mPart; pos.notional *= 1 - frac; pos.funding -= fPart; pos.openFee -= ofPart; pos.cost = pos.margin;
+      pos.xQty = (pos.xQty || 0) + q; pos.xVal = (pos.xVal || 0) + q * price;
     }
     fund(symbol, price, rate) {
       const pos = this.positions[symbol];
@@ -588,18 +663,20 @@
       const pos = this.positions[symbol]; delete this.positions[symbol];
       let fill, pnl, closeFee = 0;
       if (reason === "liquidation") {
-        fill = price; pnl = -pos.margin - pos.openFee - pos.funding; this.nLiq++;
+        fill = price; pnl = -pos.margin - pos.openFee - pos.funding + (pos.pnlAcc || 0); this.nLiq++;
       } else {
         fill = price * (1 - pos.dir * this.slip);
         const gross = pos.dir * pos.qty * (fill - pos.entryPrice);
         closeFee = pos.qty * fill * this.feeRate;
         this.cash += pos.margin + gross - closeFee - pos.funding;
-        pnl = gross - closeFee - pos.openFee - pos.funding;
+        pnl = gross - closeFee - pos.openFee - pos.funding + (pos.pnlAcc || 0);
       }
+      const base = pos.costTotal ?? pos.margin;
       this.nTrades++; if (pnl > 0) this.nWins++; this.realizedPnl += pnl;
       const t = { symbol, dir: pos.dir, lev: pos.lev, entryTime: pos.entryTime, exitTime: when, entryPrice: pos.entryPrice, exitPrice: fill,
-                  qty: pos.qty, cost: pos.margin, pnl, pnlPct: pnl / pos.margin, reason, funding: pos.funding,
-                  grossPct: pos.dir * (price / pos.rawEntry - 1), sym: pos.symbol, slotName: pos.slotName };
+                  qty: pos.qty, cost: base, pnl, pnlPct: pnl / base, reason, funding: pos.funding,
+                  grossPct: pos.dir * (exitAvg(pos, price) / pos.rawEntry - 1), sym: pos.symbol, slotName: pos.slotName,
+                  scaled: (pos.added ? "+" : "") + (pos.partialDone ? "½" : "") };
       this.trades.push(t);
       return t;
     }
@@ -620,6 +697,13 @@
   // o.from/o.to로 구간만 매매 (지표는 전체 데이터로 계산 → 워밍업 확보, 미래 데이터 미사용)
   // o.market: "spot" | "futures", o.dir: "long" | "short" | "both", o.leverage, o.fundingRate(8시간당)
   const FUNDING_MS = 8 * 3600e3;
+  function openPos(b, key, side, price, size, candleTs, when, extra, p, kind) {
+    const first = p.scaleIn ? size * p.siFrac : size;
+    const pos = b.open(key, side, price, first, candleTs, when, extra);
+    pos.kind = kind === "revert" ? "revert" : "trend";
+    if (p.scaleIn) pos.reserve = size - first;
+    return pos;
+  }
   function simulate(c, strat, p, o) {
     const sym = o.symbol || "SYM", I = o.I || makeI(c), at = I.atr(14), n = c.close.length;
     const fut = o.market === "futures", longOn = !fut || o.dir !== "short", shortOn = fut && (o.dir === "short" || o.dir === "both");
@@ -634,15 +718,21 @@
         const L = longOn && entryOk(strat, c, dL, I, i - 1, p), S = shortOn && entryOk(strat, cm, dS, Im, i - 1, p);
         if (L !== S) {
           const size = Math.min(b.equity({ [sym]: c.open[i] }) * o.positionPct, b.cash);
-          if (size >= (o.minOrder ?? 10)) { b.open(sym, L ? 1 : -1, c.open[i], size, c.ts[i - 1], c.ts[i], { atr: at[i - 1], lev }); entryI = i; }
+          if (size >= (o.minOrder ?? 10)) {
+            const kind = L ? kindOf(strat, c, dL, i - 1, p) : kindOf(strat, cm, dS, i - 1, p);
+            openPos(b, sym, L ? 1 : -1, c.open[i], size, c.ts[i - 1], c.ts[i], { atr: at[i - 1], lev }, p, kind);
+            entryI = i;
+          }
         }
       }
       if (entryI !== null) {
         const pos = b.positions[sym];
         if (fr && i > entryI && c.ts[i] % FUNDING_MS === 0) b.fund(sym, c.open[i], fr);
+        scaleInStep(b, sym, pos, c.high[i], c.low[i], p);
         const sig = !strat.exit ? false : pos.dir > 0 ? strat.exit(c, dL, i, p, pos) : strat.exit(cm, dS, i, p, pos);
         const r = checkExit(pos, c.high[i], c.low[i], c.close[i], i - entryI, sig, p);
         if (r) { b.close(sym, r.price, r.reason, c.ts[i]); entryI = null; lastExitI = i; }
+        else scaleOutStep(b, sym, pos, c.high[i], c.low[i], p, c.ts[i]);
       }
       equity.push(b.equity({ [sym]: c.close[i] }));
     }
@@ -683,7 +773,7 @@
   }
 
   const Core = { ema, rma, rsi, sma, bollinger, rollMax, rollMin, atr, macd, stochRsi, adx, vwap, makeI,
-                 STRATEGIES, byId, defaults, grid, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
+                 STRATEGIES, byId, defaults, grid, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
   else root.Core = Core;
 })(typeof window !== "undefined" ? window : globalThis);
