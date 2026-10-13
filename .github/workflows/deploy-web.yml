@@ -1,0 +1,66 @@
+name: Deploy web
+
+# main에 코드가 올라오면 테스트 후 web/ 폴더를 GitHub Pages로 배포합니다.
+# 결과와 로그는 ci-status 브랜치에 기록돼요 (Claude가 확인용으로 읽음).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        id: test
+        run: |
+          set -o pipefail
+          mkdir -p ci
+          node tests/web_core.test.js 2>&1 | tee ci/build.log
+
+      - name: Stamp version
+        run: sed -i "s/__BUILD__/${GITHUB_SHA::7} · $(TZ=Asia/Seoul date '+%m-%d %H:%M')/" web/index.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Report status to ci-status branch
+        if: always()
+        run: |
+          mkdir -p ci && cd ci
+          {
+            echo "workflow: deploy-web"
+            echo "run_number: ${{ github.run_number }}"
+            echo "commit: ${{ github.sha }}"
+            echo "test: ${{ steps.test.outcome }}"
+            echo "deploy: ${{ steps.deploy.outcome }}"
+            echo "page_url: ${{ steps.deploy.outputs.page_url }}"
+            echo "job: ${{ job.status }}"
+            echo "finished_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > status.txt
+          git init -q -b ci-status
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -qm "deploy-web #${{ github.run_number }}: ${{ job.status }}"
+          git push -f -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-status
