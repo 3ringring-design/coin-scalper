@@ -543,7 +543,7 @@
       this.nTrades++; if (pnl > 0) this.nWins++; this.realizedPnl += pnl;
       const t = { symbol, dir: 1, lev: 1, entryTime: pos.entryTime, exitTime: when, entryPrice: pos.entryPrice, exitPrice: fill,
                   qty: pos.qty, cost: pos.cost, proceeds, pnl, pnlPct: pnl / pos.cost, reason,
-                  grossPct: pos.rawEntry ? price / pos.rawEntry - 1 : NaN };
+                  grossPct: pos.rawEntry ? price / pos.rawEntry - 1 : NaN, sym: pos.symbol, slotName: pos.slotName };
       this.trades.push(t);
       return t;
     }
@@ -552,7 +552,7 @@
     fund() {}
     equity(prices) {
       let v = this.cash;
-      for (const [s, pos] of Object.entries(this.positions)) v += pos.qty * (prices[s] ?? pos.entryPrice);
+      for (const [s, pos] of Object.entries(this.positions)) v += pos.qty * (prices[pos.symbol ?? s] ?? pos.entryPrice);
       return v;
     }
   }
@@ -599,14 +599,14 @@
       this.nTrades++; if (pnl > 0) this.nWins++; this.realizedPnl += pnl;
       const t = { symbol, dir: pos.dir, lev: pos.lev, entryTime: pos.entryTime, exitTime: when, entryPrice: pos.entryPrice, exitPrice: fill,
                   qty: pos.qty, cost: pos.margin, pnl, pnlPct: pnl / pos.margin, reason, funding: pos.funding,
-                  grossPct: pos.dir * (price / pos.rawEntry - 1) };
+                  grossPct: pos.dir * (price / pos.rawEntry - 1), sym: pos.symbol, slotName: pos.slotName };
       this.trades.push(t);
       return t;
     }
     equity(prices) {
       let v = this.cash;
       for (const [s, pos] of Object.entries(this.positions)) {
-        const px = prices[s] ?? pos.entryPrice;
+        const px = prices[pos.symbol ?? s] ?? pos.entryPrice;
         v += Math.max(0, pos.margin + pos.dir * pos.qty * (px - pos.entryPrice) - pos.funding);
       }
       return v;

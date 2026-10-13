@@ -118,8 +118,16 @@ canvas { display: block; width: 100%; height: 240px; }
 
   <!-- 실시간 -->
   <section class="tab on" id="tab-live">
+    <div class="strat-bar" style="border-color:#5a4515">
+      <div style="flex:1;min-width:240px">
+        <b>⚡ 추천 포트폴리오로 자동 세팅</b>
+        <div class="note">연구실 롤링 검증에서 가장 꾸준했던 3개 전략을 자금을 나눠 같이 돌려요 · 선물 모의 · 롱+숏 · 1배 · 계좌를 새로 시작하고 바로 실행</div>
+        <div id="presetList" style="margin-top:6px"></div>
+      </div>
+      <button class="btn primary" id="presetBtn">⚡ 세팅하고 시작</button>
+    </div>
     <div class="strat-bar">
-      <span class="muted small">현재 전략</span><b id="curStrat"></b><span id="curParams"></span>
+      <span class="muted small">현재</span><b id="curStrat"></b><span id="curParams"></span>
       <span class="spacer"></span><button class="btn small" data-goto="set">변경</button>
     </div>
     <div class="row">
@@ -190,8 +198,15 @@ canvas { display: block; width: 100%; height: 240px; }
     </div>
     <div class="progress" id="labProg"><div></div></div>
     <div class="panel">
-      <h2>순위 <span class="muted small" id="labHead">통과 구간 수 → 검증 수익률 순 · 레버리지 1배 · 종목 평균 · 행을 누르면 상세</span></h2>
+      <h2>순위 <span class="muted small" id="labHead">통과 구간 수 → 검증 수익률 순 · 레버리지 1배 · 종목 평균 · 행을 누르면 상세 · ☐로 조합에 담기</span></h2>
       <div class="scroll"><table id="labTbl"><tr><td class="empty">아직 실행하지 않았어요.</td></tr></table></div>
+    </div>
+    <div class="panel" id="comboPanel" style="display:none">
+      <h2>조합 결과 <span class="muted small">담은 전략에 자금을 똑같이 나눠 같이 돌렸다면 (검증 구간만, 종목 평균)</span>
+        <button class="btn primary small" id="comboApply">이 조합을 실시간 포트폴리오로 적용</button></h2>
+      <div class="scroll"><table id="comboTbl"></table></div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>조합</span><span><i style="background:var(--muted)"></i>그냥 보유</span><span id="comboSym"></span></div>
+      <canvas id="comboCanvas"></canvas>
     </div>
     <div class="panel" id="labDetail" style="display:none">
       <h2><span id="ldTitle"></span><button class="btn primary small" id="applyBtn">이 전략을 실시간 모의매매에 적용</button></h2>
@@ -264,7 +279,7 @@ const sleep0 = () => new Promise(r => setTimeout(r, 0));
 const GENERAL = {
   symbols: "BTCUSDT, ETHUSDT, SOLUSDT", pollSeconds: 15, startingCash: 1000, feeRate: 0.001, slippageBps: 5,
   positionPct: 0.25, maxPositions: 3, minOrder: 10, cooldownBars: 3, strategyId: "v1", interval: "5m", params: null,
-  market: "spot", direction: "long", leverage: 1, fundingRate: 0.0001,
+  market: "spot", direction: "long", leverage: 1, fundingRate: 0.0001, slots: null,
 };
 const COST_MODES = {
   spot:     { label: "현물 — 수수료 0.1% + 슬리피지 0.05%", market: "spot", fee: 0.001, slip: 5, funding: 0 },
@@ -430,57 +445,69 @@ loadLive();
 const prices = {}, watch = {};
 let busy = false, lastTick = 0, ticker = null;
 
-async function stepSymbol(sym) {
-  const s = strat(), p = params(), tf = TF_MS[S.interval], w = Core.warmupOf(s, p, tf);
-  const all = await liveCandles(sym, S.interval, Math.max(500, w + 60));
-  if (all.ts.length < w + 2) { watch[sym] = { err: `데이터 부족 (${all.ts.length}봉, 필요 ${w + 2})` }; return; }
+// ---------- 슬롯: 전략 하나 = 슬롯 하나. 포트폴리오면 여러 슬롯이 자금 비중대로 동시에 매매 ----------
+const liveSlots = () => S.slots?.length ? S.slots
+  : [{ id: "main", name: strat().name, strategyId: S.strategyId, interval: S.interval, params: S.params, dir: S.direction, weight: 1 }];
+const slotStrat = sl => Core.byId(sl.strategyId);
+const slotParams = sl => ({ ...Core.defaults(slotStrat(sl)), ...(sl.params || {}) });
+const slotDir = sl => isFut() ? (sl.dir || S.direction) : "long";
+const posKey = (sl, sym) => sl.id === "main" ? sym : `${sl.id}|${sym}`;
+const isPortfolio = () => !!S.slots?.length;
+
+async function stepSlot(sl, sym) {
+  const s = slotStrat(sl), p = slotParams(sl), iv = sl.interval, tf = TF_MS[iv], w = Core.warmupOf(s, p, tf), key = posKey(sl, sym);
+  const all = await liveCandles(sym, iv, Math.max(500, w + 60));
+  if (all.ts.length < w + 2) { watch[key] = { err: `데이터 부족 (${all.ts.length}봉, 필요 ${w + 2})` }; return; }
   const price = all.close[all.close.length - 1];
   prices[sym] = price;
   const c = sliceC(all, 0, -1), I = Core.makeI(c), at = I.atr(14), i = c.ts.length - 1, lastTs = c.ts[i];
-  const dir = liveDir(), longOn = dir !== "short", shortOn = dir !== "long";
+  const dir = slotDir(sl), longOn = dir !== "short", shortOn = dir !== "long";
   const dL = s.prepare(c, p, I), cm = shortOn ? Core.mirror(c) : null, Im = shortOn ? Core.makeI(cm) : null, dS = shortOn ? s.prepare(cm, p, Im) : null;
   const vL = Core.viewOf(s, c, dL, I, i, p), vS = shortOn ? Core.viewOf(s, cm, dS, Im, i, p) : null;
-  watch[sym] = { price, info: vL.info, L: longOn ? vL.conds : null, S: vS ? vS.conds : null };
+  watch[key] = { price, info: vL.info, L: longOn ? vL.conds : null, S: vS ? vS.conds : null };
+  const tag = isPortfolio() ? `[${sl.name}] ` : "";
 
-  const pos = broker.positions[sym];
+  const pos = broker.positions[key];
   if (pos) {
     if (!isN(pos.atr)) pos.atr = at[i];                // 이전 버전 포지션 호환
     if (!isN(pos.highest)) pos.highest = pos.entryPrice;
     if (!isN(pos.lowest)) pos.lowest = pos.entryPrice;
     if (broker.market === "futures") {                  // 8시간마다 펀딩비
-      const slot = Math.floor(Date.now() / Core.FUNDING_MS);
-      if (pos.fundSlot == null) pos.fundSlot = slot;
-      if (slot > pos.fundSlot) { broker.fund(sym, price, +S.fundingRate * (slot - pos.fundSlot)); pos.fundSlot = slot; }
+      const fs = Math.floor(Date.now() / Core.FUNDING_MS);
+      if (pos.fundSlot == null) pos.fundSlot = fs;
+      if (fs > pos.fundSlot) { broker.fund(key, price, +S.fundingRate * (fs - pos.fundSlot)); pos.fundSlot = fs; }
     }
     const bars = Math.floor((lastTs - pos.entryCandleTs) / tf);
     const sig = !s.exit ? false : (pos.dir || 1) > 0 ? s.exit(c, dL, i, p, pos) : (dS ? s.exit(cm, dS, i, p, pos) : false);
     const r = Core.checkExit(pos, price, price, price, bars, sig, p);
     if (r) {
-      const t = broker.close(sym, r.reason === "liquidation" ? pos.liq : price, r.reason, Date.now());
-      lastExit[sym] = lastTs;
-      log(`${t.dir < 0 ? "숏" : "롱"} 청산 ${sym} ${REASON[r.reason]} @ ${fmtP(t.exitPrice)} | 손익 ${t.pnl >= 0 ? "+" : ""}${fmtN(t.pnl)} USDT (${fmtPct(t.pnlPct)})`, r.reason === "liquidation" ? "err" : "sell");
+      const t = broker.close(key, r.reason === "liquidation" ? pos.liq : price, r.reason, Date.now());
+      lastExit[key] = lastTs;
+      log(`${tag}${t.dir < 0 ? "숏" : "롱"} 청산 ${sym} ${REASON[r.reason]} @ ${fmtP(t.exitPrice)} | 손익 ${t.pnl >= 0 ? "+" : ""}${fmtN(t.pnl)} USDT (${fmtPct(t.pnlPct)})`, r.reason === "liquidation" ? "err" : "sell");
     }
     return;
   }
-  if (lastEval[sym] === lastTs) return;   // 캔들 하나당 진입 판단 1회
-  lastEval[sym] = lastTs;
-  if (lastExit[sym] != null && (lastTs - lastExit[sym]) / tf < +S.cooldownBars) return;
+  if (lastEval[key] === lastTs) return;   // 캔들 하나당 진입 판단 1회
+  lastEval[key] = lastTs;
+  if (lastExit[key] != null && (lastTs - lastExit[key]) / tf < +S.cooldownBars) return;
   const L = longOn && Core.entryOk(s, c, dL, I, i, p), Sg = shortOn && Core.entryOk(s, cm, dS, Im, i, p);
   if (!isN(at[i]) || L === Sg) return;
-  if (Object.keys(broker.positions).length >= +S.maxPositions) { log(`${sym} 신호 발생 — 최대 보유 종목 수라 건너뜀`); return; }
-  const size = Math.min(broker.equity(prices) * +S.positionPct, broker.cash);
-  if (size < +S.minOrder) { log(`${sym} 신호 발생 — 현금 부족`); return; }
-  const side = L ? 1 : -1, ps = broker.open(sym, side, price, size, lastTs, Date.now(), { atr: at[i], strategy: s.id, lev: liveLev() });
-  log(`${side > 0 ? "롱" : "숏"} 진입 ${sym} @ ${fmtP(ps.entryPrice)} | ${fmtN(ps.cost)} USDT${ps.lev > 1 ? ` × ${ps.lev}배` : ""}${ps.liq ? ` · 청산가 ${fmtP(ps.liq)}` : ""} · ${s.name}`, "buy");
+  if (Object.keys(broker.positions).length >= +S.maxPositions) { log(`${tag}${sym} 신호 발생 — 최대 보유 수라 건너뜀`); return; }
+  const totalW = liveSlots().reduce((a, x) => a + (+x.weight || 0), 0) || 1;
+  const size = Math.min(broker.equity(prices) * ((+sl.weight || 0) / totalW) * +S.positionPct, broker.cash);
+  if (size < +S.minOrder) { log(`${tag}${sym} 신호 발생 — 현금 부족`); return; }
+  const side = L ? 1 : -1, ps = broker.open(key, side, price, size, lastTs, Date.now(),
+    { atr: at[i], strategy: s.id, lev: liveLev(), symbol: sym, slotName: isPortfolio() ? sl.name : undefined });
+  log(`${tag}${side > 0 ? "롱" : "숏"} 진입 ${sym} @ ${fmtP(ps.entryPrice)} | ${fmtN(ps.cost)} USDT${ps.lev > 1 ? ` × ${ps.lev}배` : ""}${ps.liq ? ` · 청산가 ${fmtP(ps.liq)}` : ""}${isPortfolio() ? "" : ` · ${s.name}`}`, "buy");
 }
 
 async function tick() {
   if (busy || !running) return;
   busy = true;
   try {
-    for (const s of symbols()) {
-      try { await stepSymbol(s); }
-      catch (e) { watch[s] = { err: e.message }; log(`${s}: ${e.message}`, "err"); }
+    for (const sl of liveSlots()) for (const sym of symbols()) {
+      try { await stepSlot(sl, sym); }
+      catch (e) { watch[posKey(sl, sym)] = { err: e.message }; log(`${sym}: ${e.message}`, "err"); }
     }
     lastTick = Date.now();
     saveLive();
@@ -497,14 +524,29 @@ function startTicker() {
 function stopTicker() { if (ticker) { ticker.terminate(); ticker = null; } }
 function setRunning(on) {
   running = on; saveLive();
-  if (on) { log(`모의매매 시작: ${strat().name} · ${S.interval} · ${symbols().join(", ")}`); startTicker(); tick(); }
+  if (on) { log(`모의매매 시작: ${isPortfolio() ? `포트폴리오 ${liveSlots().length}개 전략` : `${strat().name} · ${S.interval}`} · ${marketText()} · ${symbols().join(", ")}`); startTicker(); tick(); }
   else { stopTicker(); log("모의매매 정지"); }
   renderLive();
 }
 
+function slotStats(sl) {
+  const pre = sl.id === "main" ? null : sl.id + "|";
+  const mine = t => pre ? String(t.symbol).startsWith(pre) : !String(t.symbol).includes("|");
+  const tr = broker.trades.filter(mine), pnl = tr.reduce((a, t) => a + t.pnl, 0);
+  const open = Object.entries(broker.positions).filter(([k]) => pre ? k.startsWith(pre) : !k.includes("|"));
+  const upnl = open.reduce((a, [, ps]) => a + ps.dir * ps.qty * ((prices[ps.symbol ?? ""] ?? ps.entryPrice) - ps.entryPrice), 0);
+  return { n: tr.length, wins: tr.filter(t => t.pnl > 0).length, pnl, upnl, open: open.length };
+}
 function renderStratBar() {
-  $("curStrat").textContent = `${strat().name} · ${S.interval} · ${marketText()}`;
-  $("curParams").innerHTML = `<span class="muted small">${esc(paramText(strat(), params(), true) || "고정 설정")}</span>`;
+  if (isPortfolio()) {
+    const tw = liveSlots().reduce((a, x) => a + (+x.weight || 0), 0) || 1;
+    $("curStrat").textContent = `포트폴리오 ${liveSlots().length}개 · ${marketText()}`;
+    $("curParams").innerHTML = liveSlots().map(sl => { const st = slotStats(sl);
+      return `<span class="kv" title="${esc(paramText(slotStrat(sl), slotParams(sl), true))}">${esc(sl.name)} · ${sl.interval} · ${Math.round(sl.weight / tw * 100)}% · <span class="${cls(st.pnl + st.upnl)}">${st.pnl + st.upnl >= 0 ? "+" : ""}${fmtN(st.pnl + st.upnl)}</span> (${st.n}회)</span>`; }).join("");
+  } else {
+    $("curStrat").textContent = `${strat().name} · ${S.interval} · ${marketText()}`;
+    $("curParams").innerHTML = `<span class="muted small">${esc(paramText(strat(), params(), true) || "고정 설정")}</span>`;
+  }
 }
 function renderLive() {
   const btn = $("runBtn");
@@ -516,11 +558,13 @@ function renderLive() {
   $("cCash").textContent = fmtN(broker.cash);
   $("cTr").textContent = `${broker.nTrades} / ${broker.nTrades ? Math.round(broker.nWins / broker.nTrades * 100) + "%" : "–"}`;
 
-  $("watchTbl").innerHTML = `<tr><th>종목</th><th>현재가</th><th>지표</th><th>조건</th><th>상태</th></tr>` +
-    symbols().map(s => {
-      const v = watch[s], pos = broker.positions[s];
-      if (!v) return `<tr><td>${s}</td><td colspan="4" class="empty">${running ? "확인 중…" : "시작하면 표시돼요"}</td></tr>`;
-      if (v.err) return `<tr><td>${s}</td><td colspan="4" class="down l">${esc(v.err)}</td></tr>`;
+  const multi = isPortfolio();
+  $("watchTbl").innerHTML = `<tr>${multi ? "<th>전략</th>" : ""}<th>종목</th><th>현재가</th><th>지표</th><th>조건</th><th>상태</th></tr>` +
+    liveSlots().flatMap(sl => symbols().map(s => {
+      const key = posKey(sl, s), v = watch[key], pos = broker.positions[key];
+      const head = `${multi ? `<td class="name l">${esc(sl.name)} <span class="muted small">${sl.interval}</span></td>` : ""}<td>${s}</td>`;
+      if (!v) return `<tr>${head}<td colspan="4" class="empty">${running ? "확인 중…" : "시작하면 표시돼요"}</td></tr>`;
+      if (v.err) return `<tr>${head}<td colspan="4" class="down l">${esc(v.err)}</td></tr>`;
       const sides = [["L", v.L], ["S", v.S]].filter(x => x[1]);
       const best = Math.max(...sides.map(([, cs]) => cs.filter(c => c.ok).length - cs.length));
       const pr = pos ? (pos.dir || 1) * (v.price / pos.entryPrice - 1) * (pos.lev || 1) : 0;
@@ -528,16 +572,16 @@ function renderLive() {
         : best === 0 ? `<span class="pill near">진입 신호</span>` : best === -1 ? `<span class="pill near">근접</span>` : `<span class="pill">대기</span>`;
       const title = sides.map(([k, cs]) => (k === "L" ? "[롱]\n" : "[숏]\n") + cs.map(c => `${c.ok ? "●" : "○"} ${c.label}`).join("\n")).join("\n");
       const dots = sides.map(([k, cs]) => (sides.length > 1 ? `<span class="muted">${k}</span>` : "") + cs.map(c => c.ok ? "●" : "○").join("")).join(" ");
-      return `<tr><td>${s}</td><td>${fmtP(v.price)}</td><td>${esc(v.info)}</td>
+      return `<tr>${head}<td>${fmtP(v.price)}</td><td>${esc(v.info)}</td>
         <td class="conds" title="${esc(title)}">${dots}</td><td>${state}</td></tr>`;
-    }).join("");
+    })).join("");
 
   const tr = broker.trades.slice(-50).reverse();
   $("tradeTbl").innerHTML = tr.length
-    ? `<tr><th>종목</th><th>방향</th><th>진입</th><th>청산</th><th>진입가</th><th>청산가</th><th>손익</th><th>수익률</th><th>사유</th></tr>` +
-      tr.map(t => `<tr><td>${t.symbol}</td><td>${sideText(t)}${(t.lev || 1) > 1 ? ` ×${t.lev}` : ""}</td><td>${fmtT(t.entryTime)}</td><td>${fmtT(t.exitTime)}</td><td>${fmtP(t.entryPrice)}</td>
+    ? `<tr>${multi ? "<th>전략</th>" : ""}<th>종목</th><th>방향</th><th>진입</th><th>청산</th><th>진입가</th><th>청산가</th><th>손익</th><th>수익률</th><th>사유</th></tr>` +
+      tr.map(t => `<tr>${multi ? `<td class="name l">${esc(t.slotName || "–")}</td>` : ""}<td>${t.sym || t.symbol}</td><td>${sideText(t)}${(t.lev || 1) > 1 ? ` ×${t.lev}` : ""}</td><td>${fmtT(t.entryTime)}</td><td>${fmtT(t.exitTime)}</td><td>${fmtP(t.entryPrice)}</td>
         <td>${fmtP(t.exitPrice)}</td><td class="${cls(t.pnl)}">${fmtN(t.pnl)}</td><td class="${cls(t.pnl)}">${fmtPct(t.pnlPct)}</td><td>${REASON[t.reason] || t.reason}</td></tr>`).join("")
-    : `<tr><td class="empty">아직 거래가 없어요. 조건이 다 맞을 때까지 몇 시간 걸릴 수도 있어요.</td></tr>`;
+    : `<tr><td class="empty">아직 거래가 없어요. 1시간봉 전략은 조건이 맞을 때까지 반나절~하루 걸릴 수도 있어요.</td></tr>`;
   renderStratBar();
 }
 setInterval(() => {
@@ -645,7 +689,7 @@ $("btBtn").onclick = runBacktest;
 // ---------------- 전략 연구실 ----------------
 // 구간(fold)마다: 학습 구간에서 모든 설정 조합을 돌려 최적 설정 선택 → 바로 다음 검증 구간에서 채점.
 // "한 번 나누기"는 구간이 1개인 경우.
-let labRows = [], labSel = 0, labSymSel = 0, labRunning = false, labMeta = null;
+let labRows = [], labSel = 0, labSymSel = 0, labRunning = false, labMeta = null, labPick = new Set();
 const dataCache = {};
 const DAY = 864e5;
 const checked = id => [...$(id).querySelectorAll("input:checked")].map(i => i.value);
@@ -741,7 +785,7 @@ async function runLab() {
         }), prog = $("labProg"), bar = prog.firstElementChild;
   const setProg = f => { bar.style.width = (f * 100).toFixed(1) + "%"; };
   labRunning = true; btn.disabled = true; prog.style.display = "block"; setProg(0);
-  labRows = [];
+  labRows = []; labPick = new Set();
   try {
     // 1) 5분봉 받기 (지표 워밍업용 여유 포함) → 15m·1h는 합쳐서 만듦
     const maxWarmMs = Math.max(...tfs.flatMap(tf => variants.flatMap(v => Core.grid(v.s, v.ov).map(p => Core.warmupOf(v.s, p, TF_MS[tf]) * TF_MS[tf]))));
@@ -819,15 +863,20 @@ async function runLab() {
 }
 function renderLab(sel) {
   labSel = sel;
-  $("labTbl").innerHTML = `<tr><th>#</th><th class="l">전략</th><th>봉</th><th>판정</th><th>학습 (평균)</th><th>검증 (누적)</th><th>검증 거래</th><th title="검증 구간 롱/숏 거래 수">롱/숏</th><th>승률</th>
+  $("labTbl").innerHTML = `<tr><th title="조합에 담기">담기</th><th>#</th><th class="l">전략</th><th>봉</th><th>판정</th><th>학습 (평균)</th><th>검증 (누적)</th><th>검증 거래</th><th title="검증 구간 롱/숏 거래 수">롱/숏</th><th>승률</th>
       <th title="거래 한 번당 평균 가격 움직임 (수수료·슬리피지 빼기 전)">거래당 (비용 전)</th><th title="수수료 + 슬리피지 왕복">왕복 비용</th><th title="거래당 수익 − 왕복 비용">여유</th>
       <th>최대 낙폭</th><th>손익비</th><th>그냥 보유</th></tr>` +
-    labRows.map((r, k) => `<tr class="click ${k === sel ? "sel" : ""}" data-k="${k}"><td>${k + 1}</td><td class="l name">${r.name}</td><td>${r.tf}</td><td>${verdict(r)}</td>
+    labRows.map((r, k) => `<tr class="click ${k === sel ? "sel" : ""}" data-k="${k}"><td><input type="checkbox" class="pick" data-k="${k}" ${labPick.has(r) ? "checked" : ""}></td><td>${k + 1}</td><td class="l name">${r.name}</td><td>${r.tf}</td><td>${verdict(r)}</td>
       <td class="${cls(r.train.avg)}">${fmtPct(r.train.avg)}</td><td class="${cls(r.test.avg)}"><b>${fmtPct(r.test.avg)}</b></td>
       <td>${r.test.trades}</td><td class="muted">${r.test.longs}/${r.test.shorts}</td><td>${(r.test.winRate * 100).toFixed(0)}%</td>
       <td class="${cls(r.test.edge)}">${fmtPct(r.test.edge, 3)}</td><td class="muted">${fmtPct(-r.rt, 3)}</td><td class="${cls(r.test.edge - r.rt)}">${fmtPct(r.test.edge - r.rt, 3)}</td>
       <td class="down">${fmtPct(r.test.mdd)}</td><td>${fmtPF(r.test.pf)}</td><td class="${cls(r.test.bh)}">${fmtPct(r.test.bh)}</td></tr>`).join("");
   $("labTbl").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { labSymSel = 0; renderLab(+tr.dataset.k); });
+  $("labTbl").querySelectorAll("input.pick").forEach(cb => {
+    cb.onclick = e => e.stopPropagation();
+    cb.onchange = () => { const r = labRows[+cb.dataset.k]; cb.checked ? labPick.add(r) : labPick.delete(r); renderCombo(); };
+  });
+  renderCombo();
   renderLabDetail();
 }
 function renderLabDetail() {
@@ -890,6 +939,44 @@ function renderLev(r) {
     r.levRows.map(x => `<tr><td>${x.lev}배</td><td class="${cls(x.avg)}"><b>${fmtPct(x.avg)}</b></td><td class="${cls(x.worst)}">${fmtPct(x.worst)}</td>
       <td class="down">${fmtPct(x.mdd)}</td><td class="${cls(x.low)}">${fmtPct(x.low)}</td><td class="${x.liq ? "down" : "muted"}">${x.liq ? `💥 ${x.liq}회` : "0"}</td></tr>`).join("");
 }
+// ---------- 조합: 담은 전략들의 검증 구간 자산 곡선을 시간축에 맞춰 똑같은 비중으로 합침 ----------
+function comboSeries(rows, j) {
+  const base = rows.reduce((a, r) => (TF_MS[r.tf] > TF_MS[a.tf] ? r : a), rows[0]), bp = base.test.per[j];
+  const T = bp.equity.map((_, k) => bp.c.ts[bp.start + k]), cash = base.opt.startingCash;
+  const comb = new Array(T.length).fill(0);
+  for (const r of rows) {
+    const pp = r.test.per[j]; let q = 0, last = 1;
+    for (let k = 0; k < T.length; k++) {
+      while (q < pp.equity.length && pp.c.ts[pp.start + q] <= T[k]) { last = pp.equity[q] / cash; q++; }
+      comb[k] += last / rows.length;
+    }
+  }
+  return { sym: bp.sym, c: bp.c, start: bp.start, equity: comb.map(v => v * cash), ret: comb[comb.length - 1] - 1, mdd: mddOf(comb), bh: bp.stats.buyHoldReturn };
+}
+let comboSymSel = 0;
+function renderCombo() {
+  const rows = [...labPick].filter(r => labRows.includes(r));
+  if (rows.length < 2) { $("comboPanel").style.display = "none"; return; }
+  $("comboPanel").style.display = "block";
+  const per = rows[0].syms.map((_, j) => comboSeries(rows, j));
+  const avg = per.reduce((a, x) => a + x.ret, 0) / per.length, mdd = Math.min(...per.map(x => x.mdd));
+  $("comboTbl").innerHTML = `<tr><th class="l">전략</th><th>봉</th><th>검증 누적 (평균)</th><th>최대 낙폭 (최악 종목)</th><th>통과 구간</th></tr>` +
+    rows.map(r => `<tr><td class="l name">${esc(r.name)}</td><td>${r.tf}</td><td class="${cls(r.test.avg)}">${fmtPct(r.test.avg)}</td><td class="down">${fmtPct(r.test.mdd)}</td><td>${r.foldPos}/${r.folds.length}</td></tr>`).join("") +
+    `<tr class="sel"><td class="l name"><b>📦 조합 (각 ${Math.round(100 / rows.length)}%)</b></td><td></td><td class="${cls(avg)}"><b>${fmtPct(avg)}</b></td><td class="down"><b>${fmtPct(mdd)}</b></td><td></td></tr>` +
+    `<tr><td class="l small muted" colspan="5" style="font-family:var(--sans)">종목별 (누르면 차트): ${per.map((x, j) => `<a href="#" data-j="${j}" style="color:${j === comboSymSel ? "var(--accent)" : "var(--muted)"}">${x.sym} ${fmtPct(x.ret)} / 낙폭 ${fmtPct(x.mdd)}</a>`).join(" · ")}</td></tr>`;
+  $("comboTbl").querySelectorAll("a[data-j]").forEach(a => a.onclick = e => { e.preventDefault(); comboSymSel = +a.dataset.j; renderCombo(); });
+  const sel = per[Math.min(comboSymSel, per.length - 1)];
+  $("comboSym").textContent = `· ${sel.sym}`;
+  drawChart($("comboCanvas"), sel, rows[0].opt.startingCash);
+  labMeta && (labMeta.combo = { names: rows.map(r => `${r.name} ${r.tf}`), avg, mdd });
+}
+$("comboApply").onclick = () => {
+  const rows = [...labPick].filter(r => labRows.includes(r));
+  if (rows.length < 2) return;
+  const m = COST_MODES[rows[0].costKey];
+  const slots = rows.map((r, k) => ({ id: "s" + (k + 1), name: r.name, strategyId: r.s.id, interval: r.tf, params: { ...r.p }, dir: r.dir, weight: 1 }));
+  applyPortfolio(slots, m, `연구실 조합 ${rows.length}개`);
+};
 $("labBtn").onclick = runLab;
 $("applyBtn").onclick = () => {
   const r = labRows[labSel]; if (!r) return;
@@ -898,7 +985,7 @@ $("applyBtn").onclick = () => {
   if (!confirm(`실시간 모의매매를 '${r.name} · ${r.tf} · ${m.market === "futures" ? "선물" : "현물"} ${DIR_KO[r.dir]}'로 바꿀까요?${levTxt}` +
     (r.folds.length > 1 ? `\n가장 최근 구간에서 고른 설정을 써요.` : "") +
     (mkChange ? `\n시장이 바뀌어서 모의 계좌가 새로 시작돼요.` : n ? `\n보유 중인 ${n}종목은 새 전략의 청산 규칙으로 관리돼요.` : ""))) return;
-  S.strategyId = r.s.id; S.interval = r.tf; S.params = { ...r.p };
+  S.strategyId = r.s.id; S.interval = r.tf; S.params = { ...r.p }; S.slots = null;
   if (r.costKey !== "zero") { S.feeRate = m.fee; S.slippageBps = m.slip; S.fundingRate = m.funding || S.fundingRate; }
   S.market = m.market; S.direction = r.dir; if (m.market === "spot") S.leverage = 1;
   store.set("cs_settings", S);
@@ -907,6 +994,43 @@ $("applyBtn").onclick = () => {
   if (running) startTicker();
   log(`전략 변경 → ${r.name} · ${r.tf} · ${marketText()} (${paramText(r.s, r.p, true)})`);
   renderSettings(); renderLive(); toast("적용했어요");
+};
+
+// ---------------- 포트폴리오 적용 ----------------
+function applyPortfolio(slots, mode, label, opts = {}) {
+  const lines = slots.map(sl => `· ${sl.name} · ${sl.interval} · ${DIR_KO[sl.dir] || ""}`).join("\n");
+  if (!opts.silent && !confirm(`실시간 모의매매를 포트폴리오로 바꿀까요? (${label})\n${lines}\n\n${mode.market === "futures" ? "선물" : "현물"} · 모의 계좌를 새로 시작해요.`)) return false;
+  S.slots = slots;
+  if (mode.fee != null && mode !== COST_MODES.zero) { S.feeRate = mode.fee; S.slippageBps = mode.slip; if (mode.funding) S.fundingRate = mode.funding; }
+  S.market = mode.market;
+  if (S.market === "spot") { S.leverage = 1; S.direction = "long"; } else S.direction = "both";
+  Object.assign(S, opts.settings || {});
+  S.maxPositions = Math.max(+S.maxPositions, slots.length * symbols().length);
+  store.set("cs_settings", S);
+  const wasRunning = running;
+  live = null; store.del("cs_live"); loadLive(); lastEval = {}; lastExit = {};
+  running = opts.start ? true : wasRunning; saveLive();
+  log(`포트폴리오 적용 — ${label}: ${slots.map(sl => `${sl.name} ${sl.interval} ${sl.weight}`).join(" / ")} · ${marketText()} · 새 계좌 ${fmtN(+S.startingCash)} USDT`);
+  renderSettings(); renderLive();
+  if (running) { startTicker(); tick(); }
+  return true;
+}
+// 연구실 롤링 검증(180일, 학습60→검증30 × 4구간, 선물 시장가, 롱+숏)에서 반복해서 상위에 오른 조합
+const PRESET = {
+  slots: [
+    { id: "s1", name: "투매 반등 +횡보장만", strategyId: "capitulation", interval: "1h", dir: "both", weight: 40,
+      params: { reds: 3, dropAtr: 3, stopAtr: 2.5, takeAtr: 2.5, regime: 2 }, why: "3/4구간 +, 승률 73%, 넓은 손절이 꾸준히 유리" },
+    { id: "s2", name: "눌림목 반등 (ATR)", strategyId: "pullback", interval: "1h", dir: "both", weight: 30,
+      params: { bbStd: 2.5, rsiEntry: 38, stopAtr: 1.5, takeAtr: 2 }, why: "세 번 연속 3/4구간 +" },
+    { id: "s3", name: "채널 돌파 + ADX +추세장만", strategyId: "donchian", interval: "1h", dir: "both", weight: 30,
+      params: { chN: 20, adxMin: 25, stopAtr: 1.5, trailAtr: 4.5, regime: 1 }, why: "추세장 담당 · 거래당 여유 +0.8%" },
+  ],
+  settings: { symbols: "BTCUSDT, ETHUSDT, SOLUSDT", leverage: 1, positionPct: 0.33, cooldownBars: 3, pollSeconds: 15 },
+};
+$("presetList").innerHTML = PRESET.slots.map(sl => `<span class="kv" title="${esc(sl.why)}">${esc(sl.name)} · ${sl.interval} · ${sl.weight}%</span>`).join("") +
+  `<span class="muted small"> BTC·ETH·SOL · 전략마다 자금의 일부를 종목당 1/3씩</span>`;
+$("presetBtn").onclick = () => {
+  if (applyPortfolio(PRESET.slots.map(({ why, ...sl }) => ({ ...sl })), COST_MODES.futTaker, "⚡ 추천 세팅", { settings: PRESET.settings, start: true })) toast("세팅 완료 · 실행 중이에요");
 };
 
 // ---------------- 설정 화면 ----------------
@@ -936,11 +1060,14 @@ function syncMarketFields() {
 }
 function renderStratForm(p) {
   const s = Core.byId(formStratId);
-  $("stratForm").innerHTML = `<h3>전략</h3>
+  const pf = isPortfolio() ? `<h3>포트폴리오 (지금 실행 중) <button class="btn small" id="pfOff" style="margin-left:8px">포트폴리오 끄고 아래 단일 전략 쓰기</button></h3>` +
+    liveSlots().map((sl, k) => `<label>${esc(sl.name)} · ${sl.interval} · 비중<input id="w_${k}" type="number" step="any" value="${esc(sl.weight)}"><span class="hint">${esc(paramText(slotStrat(sl), slotParams(sl), true) || "고정")}</span></label>`).join("") : "";
+  $("stratForm").innerHTML = pf + `<h3>${isPortfolio() ? "단일 전략 (포트폴리오를 끄면 사용)" : "전략"}</h3>
     <label>전략 선택<select id="f_strategyId">${Core.STRATEGIES.map(x => `<option value="${x.id}" ${x.id === s.id ? "selected" : ""}>${x.name}</option>`).join("")}</select></label>
     <label>캔들 간격<select id="f_interval">${TFS.map(t => `<option ${t === S.interval ? "selected" : ""}>${t}</option>`).join("")}</select></label>
     <div class="wide note">${esc(s.desc)}</div>` +
     s.params.map(x => `<label>${x.label}<input id="p_${x.k}" type="number" step="any" value="${esc(p[x.k])}">${x.grid ? `<span class="hint">연구실 비교값: ${x.grid.join(", ")}</span>` : ""}</label>`).join("");
+  if ($("pfOff")) $("pfOff").onclick = () => { if (!confirm("포트폴리오를 끄고 단일 전략으로 바꿀까요? (보유 포지션은 그대로 남아요)")) return; S.slots = null; store.set("cs_settings", S); log("포트폴리오 끔"); renderSettings(); renderLive(); };
   $("f_strategyId").onchange = e => { formStratId = e.target.value; renderStratForm(Core.defaults(Core.byId(formStratId))); };
 }
 $("saveBtn").onclick = () => {
@@ -955,6 +1082,7 @@ $("saveBtn").onclick = () => {
   if (!confirmMarketChange(next.market)) return;
   const s = Core.byId($("f_strategyId").value), p = {};
   for (const x of s.params) { p[x.k] = Number($("p_" + x.k).value); if (!Number.isFinite(p[x.k])) { toast(`'${x.label}' 값이 숫자가 아니에요`); return; } }
+  if (isPortfolio()) next.slots = S.slots.map((sl, k) => ({ ...sl, weight: Math.max(0, Number($("w_" + k).value) || 0) }));
   const changed = next.strategyId !== s.id || next.interval !== $("f_interval").value;
   next.strategyId = s.id; next.interval = $("f_interval").value; next.params = p;
   const marketChanged = next.market !== S.market;
@@ -1000,12 +1128,14 @@ $("copyBtn").onclick = async () => {
   const lines = [
     `[Coin Scalper ${$("ver").textContent}] ${new Date().toLocaleString("ko-KR")}`,
     `접속: ${$("connText").textContent} | ${running ? "실행 중" : "정지"} | 브라우저: ${navigator.userAgent.match(/(Edg|Chrome|Firefox|Safari)\/[\d.]+/)?.[0] || "?"}`,
-    `전략: ${strat().name} · ${S.interval} · ${marketText()} · ${paramText(strat(), params(), false)}`,
+    isPortfolio() ? `포트폴리오 (${marketText()}): ` + liveSlots().map(sl => { const st = slotStats(sl); return `${sl.name} ${sl.interval} 비중${sl.weight} [${paramText(slotStrat(sl), slotParams(sl), true)}] 손익 ${fmtN(st.pnl + st.upnl)} ${st.n}회 승${st.wins}`; }).join(" / ")
+      : `전략: ${strat().name} · ${S.interval} · ${marketText()} · ${paramText(strat(), params(), false)}`,
     `자산 ${fmtN(eq)} (${fmtPct(eq / broker.startingCash - 1)}) | 현금 ${fmtN(broker.cash)} | 거래 ${broker.nTrades}회 승 ${broker.nWins}`,
     `보유: ${Object.entries(broker.positions).map(([s, p]) => `${s} ${fmtPct((prices[s] ?? p.entryPrice) / p.entryPrice - 1)}`).join(", ") || "없음"}`,
     btResults.length ? `백테스트: ${btResults.map(r => `${r.sym} ${fmtPct(r.stats.totalReturn)} (${r.stats.trades}회, 승률 ${(r.stats.winRate * 100).toFixed(0)}%, 보유 ${fmtPct(r.stats.buyHoldReturn)})`).join(" / ")}` : "",
     labRows.length && labMeta ? `연구실 (${labMeta.days}일 ${labMeta.mode === "rolling" ? `롤링 학습${labMeta.trainD}→검증${labMeta.testD}일 × ${labMeta.nFolds}구간` : "학습70/검증30"}, ${symbols().join("/")}, ${COST_MODES[labMeta.costKey].label}, ${DIR_KO[labMeta.dir]}, 1배):\n` + labRows.slice(0, 10).map((r, k) =>
       `  #${k + 1} ${r.name} ${r.tf} | ${r.folds.length > 1 ? `+구간 ${r.foldPos}/${r.folds.length} [${r.folds.map(f => fmtPct(f.test.avg, 1)).join(" ")}] | ` : ""}검증 ${fmtPct(r.test.avg)} ${r.test.trades}회(L${r.test.longs}/S${r.test.shorts}) 승률 ${(r.test.winRate * 100).toFixed(0)}% MDD ${fmtPct(r.test.mdd)} PF ${fmtPF(r.test.pf)} | 거래당 ${fmtPct(r.test.edge, 3)} 여유 ${fmtPct(r.test.edge - r.rt, 3)} | 학습 ${fmtPct(r.train.avg)} | 보유 ${fmtPct(r.test.bh)} | 최근설정 ${paramText(r.s, r.p, true)}`).join("\n") : "",
+    labMeta?.combo ? `조합 (${labMeta.combo.names.join(" + ")}): 검증 ${fmtPct(labMeta.combo.avg)} 최대낙폭 ${fmtPct(labMeta.combo.mdd)}` : "",
     labRows[labSel]?.levRows ? `레버리지 (${labRows[labSel].name} ${labRows[labSel].tf}): ` + labRows[labSel].levRows.map(x => `${x.lev}배 ${fmtPct(x.avg)} MDD ${fmtPct(x.mdd)}${x.liq ? ` 청산${x.liq}` : ""}`).join(" / ") : "",
     labRows[labSel]?.exitMap ? `익절·손절 지도 (${labRows[labSel].name} ${labRows[labSel].tf}, 행=손절, 열=${exitAxes(labRows[labSel].s).xk || "-"} ${exitAxes(labRows[labSel].s).xs.join("/")}): ` + labRows[labSel].exitMap.map(row => `손절${row[0].y}: ` + row.map(c => fmtPct(c.avg, 1) + (c.picked ? "★" + c.picked : "")).join(" ")).join(" | ") : "",
     `일반 설정: 종목 ${S.symbols} · 비중 ${S.positionPct} · 최대 ${S.maxPositions}종목 · 수수료 ${S.feeRate} · 슬리피지 ${S.slippageBps}bp · 펀딩 ${S.fundingRate}`,
