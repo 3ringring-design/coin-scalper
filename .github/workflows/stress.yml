@@ -24,7 +24,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p out
-          node tools/stress.js 1460 2>&1 | tee out/stress.txt
+          node tools/stress.js 2190 2>&1 | tee out/stress.txt
       - name: Publish result
         if: always()
         run: |

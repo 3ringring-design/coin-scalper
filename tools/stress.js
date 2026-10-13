@@ -103,5 +103,25 @@ const slotsOf = (list, only) => {
 
   console.log("\n== F. 종목 늘린 계좌 ==");
   const many = [...BASE, ...OTHERS].filter(s => data[s]);
-  for (const r of [0.01, 0.02]) console.log(line(`${many.length}종목 위험 ${r * 100}%`, run(many, { riskPct: r })));
+  console.log(line(`${many.length}종목 위험 1%`, run(many, { riskPct: 0.01 })));
+
+  console.log("\n== G. 후보 세팅 (전부 같은 기간 · 연도별) ==");
+  const cand = (label, syms, opt, only, slotOv) => {
+    const save = SLOTS.map(s => ({ ...s, params: { ...s.params } }));
+    if (slotOv) SLOTS.forEach(s => slotOv(s));
+    const r = run(syms, opt, only);
+    SLOTS.splice(0, SLOTS.length, ...save);
+    console.log(line(label, r));
+    console.log("    연도별: " + Core.yearly(r.equity, r.ts).map(y => `${y.year} ${pct(y.ret)}(${pct(y.mdd, 0)})`).join(" · "));
+    const L = r.trades.filter(t => t.dir > 0).reduce((a, t) => a + t.pnl, 0), S = r.trades.filter(t => t.dir < 0).reduce((a, t) => a + t.pnl, 0);
+    console.log(`    롱 손익 ${L.toFixed(0)} / 숏 손익 ${S.toFixed(0)} (시작 1000)`);
+  };
+  const BE = ["BTCUSDT", "ETHUSDT"];
+  cand("지금 세팅 · 위험 1%", BASE, { riskPct: 0.01 });
+  cand("채널만 · 위험 1%", BASE, { riskPct: 0.01 }, "donchian");
+  cand("채널만 · BTC/ETH · 1%", BE, { riskPct: 0.01 }, "donchian");
+  cand("채널만 · 롱만 · 1%", BASE, { riskPct: 0.01 }, "donchian", s => { s.dir = "long"; });
+  cand("채널만 · 숏만 · 1%", BASE, { riskPct: 0.01 }, "donchian", s => { s.dir = "short"; });
+  cand("묶음 · BTC/ETH · 1%", BE, { riskPct: 0.01 });
+  cand("묶음 · 눌림목 롱만 · 1%", BASE, { riskPct: 0.01 }, null, s => { if (s.strategyId === "pullback") s.dir = "long"; });
 })().catch(e => { console.error(e); process.exit(1); });
