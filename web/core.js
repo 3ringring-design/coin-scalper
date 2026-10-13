@@ -166,7 +166,7 @@
       id: "pullback", name: "눌림목 반등 (ATR)",
       desc: "v1과 같은 눌림목 매수지만, 익절·손절을 변동성(ATR)에 맞춰 조절. 변동성이 클 땐 넓게, 작을 땐 좁게.",
       params: [X("emaTrend", "추세 EMA", 200), X("bbPeriod", "볼린저 기간", 20), X("bbStd", "볼린저 배수", 2, [2, 2.5]),
-        X("rsiEntry", "RSI 진입 (미만)", 35, [30, 38]), ...exitParams({ stop: [1.5, 2.5], take: [2, 3], hold: 36 })],
+        X("rsiEntry", "RSI 진입 (미만)", 35, [30, 38]), ...exitParams({ stop: [1.5, 2.5, 4], take: [2, 3, 5], hold: 48 })],
       warmup: p => Math.max(p.emaTrend * 2, p.bbPeriod, 70),
       prepare: (c, p, I) => ({ ema: I.ema(p.emaTrend), bb: I.bb(p.bbPeriod, p.bbStd), rsi: I.rsi(14) }),
       entry: (c, d, i, p) => ok(d.ema[i]) && ok(d.bb.low[i]) && ok(d.rsi[i]) &&
@@ -180,7 +180,7 @@
       desc: "볼린저밴드가 최근 가장 좁아진(에너지 응축) 직후, 거래량을 동반해 상단을 뚫으면 매수. 추적손절로 추세를 길게 탐.",
       params: [X("emaTrend", "추세 EMA", 200), X("bbPeriod", "볼린저 기간", 20), X("bbStd", "볼린저 배수", 2),
         X("sqLookback", "스퀴즈 비교 기간 (봉)", 120, [60, 120]), X("volMult", "거래량 배수", 1.5, [1.5, 2]),
-        ...exitParams({ stop: [1.5, 2.5], trail: [2, 3], hold: 72 })],
+        ...exitParams({ stop: [1.5, 2.5, 4], trail: [2, 3, 4.5], hold: 96 })],
       warmup: p => Math.max(p.emaTrend * 2, p.sqLookback + p.bbPeriod + 6, 25),
       prepare: (c, p, I) => {
         const bb = I.bb(p.bbPeriod, p.bbStd);
@@ -200,7 +200,7 @@
       id: "donchian", name: "채널 돌파 + ADX",
       desc: "최근 N봉 최고가를 돌파하고 ADX로 추세 강도가 확인될 때 매수(터틀 트레이딩 방식). 채널 하단 이탈이나 추적손절로 청산.",
       params: [X("emaTrend", "추세 EMA", 200), X("chN", "채널 기간 (봉)", 20, [20, 48]), X("adxMin", "ADX 최소", 20, [20, 25]),
-        ...exitParams({ stop: [1.5, 2.5], trail: [2, 3], hold: 96 })],
+        ...exitParams({ stop: [1.5, 2.5, 4], trail: [2, 3, 4.5], hold: 144 })],
       warmup: p => Math.max(p.emaTrend * 2, p.chN + 1, 70),
       prepare: (c, p, I) => ({ hh: I.hh(p.chN), ll: I.ll(Math.max(2, Math.floor(p.chN / 2))), adx: I.adx(14), ema: I.ema(p.emaTrend) }),
       entry: (c, d, i, p) => ok(d.hh[i]) && ok(d.adx.adx[i]) && c.close[i] > d.hh[i] && d.adx.adx[i] > p.adxMin &&
@@ -213,7 +213,7 @@
       id: "stochrsi", name: "정배열 + StochRSI 반전",
       desc: "단기·장기 이동평균이 정배열인 상승장에서, StochRSI가 과매도 구간에서 위로 꺾일 때 매수. 과매수 도달 시 청산.",
       params: [X("emaFast", "단기 EMA", 50, [50, 100]), X("emaTrend", "장기 EMA", 200), X("lvl", "과매도 기준", 20, [20, 30]),
-        X("exitLvl", "과매수 청산 기준", 80), ...exitParams({ stop: [1.5, 2], take: [2, 3], hold: 48, min: 0.004 })],
+        X("exitLvl", "과매수 청산 기준", 80), ...exitParams({ stop: [1.5, 2.5, 4], take: [2, 3, 5], hold: 72, min: 0.004 })],
       warmup: p => Math.max(p.emaTrend * 2, 60),
       prepare: (c, p, I) => ({ st: I.stoch(14, 14, 3, 3), ef: I.ema(p.emaFast), et: I.ema(p.emaTrend) }),
       entry: (c, d, i, p) => i > 0 && ok(d.st.d[i - 1]) && ok(d.st.d[i]) && d.ef[i] > d.et[i] && c.close[i] > d.et[i] &&
@@ -226,7 +226,7 @@
       id: "vwap", name: "VWAP 회귀",
       desc: "거래량 가중 평균가(VWAP)보다 ATR 몇 배 이상 과하게 빠진 뒤 RSI가 반등을 시작하면 매수. VWAP 복귀 시 청산.",
       params: [X("vwapN", "VWAP 기간 (봉)", 288, [144, 288]), X("dev", "이탈 폭 (ATR 배수)", 2, [1.5, 2.5]), X("rsiLvl", "RSI 과매도", 30, [30, 35]),
-        ...exitParams({ stop: [1.5, 2.5], hold: 48, min: 0.004 })],
+        ...exitParams({ stop: [1.5, 2.5, 4], hold: 72, min: 0.004 })],
       warmup: p => Math.max(p.vwapN + 1, 70),
       prepare: (c, p, I) => ({ vw: I.vwap(p.vwapN), atr: I.atr(14), rsi: I.rsi(14) }),
       entry: (c, d, i, p) => i > 0 && ok(d.vw[i]) && ok(d.rsi[i - 1]) && c.close[i] < d.vw[i] - p.dev * d.atr[i] &&
@@ -239,7 +239,7 @@
       id: "macd", name: "MACD 반전 + 거래량",
       desc: "상승추세 중 MACD가 0선 아래로 눌렸다가 히스토그램이 양으로 돌아서고 거래량이 붙을 때 매수. 히스토그램이 다시 음수면 청산.",
       params: [X("emaTrend", "추세 EMA", 200, [100, 200]), X("volMult", "거래량 배수", 1.5, [1.2, 1.8]),
-        ...exitParams({ stop: [1.5, 2], take: [2.5, 4], hold: 48, min: 0.004 })],
+        ...exitParams({ stop: [1.5, 2.5, 4], take: [2.5, 4, 6], hold: 72, min: 0.004 })],
       warmup: p => Math.max(p.emaTrend * 2, 90),
       prepare: (c, p, I) => ({ m: I.macd(12, 26, 9), vs: I.volSma(20), et: I.ema(p.emaTrend) }),
       entry: (c, d, i, p) => i > 0 && ok(d.vs[i]) && c.close[i] > d.et[i] && d.m.line[i] < 0 &&
@@ -252,7 +252,7 @@
       id: "capitulation", name: "투매 반등",
       desc: "음봉이 연달아 나오며 ATR 몇 배만큼 급락하고 거래량이 터진 뒤, 첫 양봉이 나오면 짧게 반등을 노림. EMA20 회복 시 청산.",
       params: [X("reds", "연속 음봉 수", 3, [3, 4]), X("dropAtr", "급락 폭 (ATR 배수)", 2, [2, 3]), X("volMult", "거래량 배수", 1.5),
-        ...exitParams({ stop: [1, 1.5], take: [1.5, 2.5], hold: 24, min: 0.004 })],
+        ...exitParams({ stop: [1, 1.5, 2.5], take: [1.5, 2.5, 4], hold: 36, min: 0.004 })],
       warmup: () => 60,
       prepare: (c, p, I) => ({ atr: I.atr(14), vs: I.volSma(20), e20: I.ema(20) }),
       parts(c, d, i, p) {

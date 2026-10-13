@@ -153,15 +153,21 @@ canvas { display: block; width: 100%; height: 240px; }
     <div class="panel">
       <h2>전략 연구실</h2>
       <div class="pad">
-        <div class="note" style="margin-bottom:12px">
-          과거 데이터를 <b>앞 70%(학습)</b>와 <b>뒤 30%(검증)</b>로 나눠요. 각 전략의 설정 조합을 학습 구간에서 모두 돌려 가장 좋은 걸 고르고,
-          그 설정 그대로 <b>한 번도 안 본 검증 구간</b>에서 성적을 매겨요. 검증에서도 수익이 나야 진짜로 통할 가능성이 있어요.
+        <div class="note" id="labNote" style="margin-bottom:12px"></div>
+        <div class="row">
+          <label class="muted small">방식</label>
+          <select id="labMode"><option value="rolling">롤링 검증 (여러 구간)</option><option value="single">한 번 나누기 (70 / 30)</option></select>
+          <span id="rollBox" class="row" style="margin:0">
+            <label class="muted small">학습</label><input type="number" id="labTrain" value="60" min="14" max="300" style="width:70px"><span class="muted small">일 →</span>
+            <label class="muted small">검증</label><input type="number" id="labTest" value="30" min="7" max="120" style="width:70px"><span class="muted small">일, 한 칸씩 이동</span>
+          </span>
         </div>
         <div class="row">
-          <label class="muted small">기간</label>
-          <input type="number" id="labDays" value="90" min="14" max="365" style="width:80px"><span class="muted small">일</span>
+          <label class="muted small">전체 기간</label>
+          <input type="number" id="labDays" value="180" min="14" max="365" style="width:80px"><span class="muted small">일</span>
           <span class="muted small" style="margin-left:8px">봉</span>
           <span class="chips" id="labTfs"></span>
+          <span class="muted small" id="labFoldNote"></span>
         </div>
         <div class="row">
           <label class="muted small">비용</label><select id="labCost"></select>
@@ -177,7 +183,7 @@ canvas { display: block; width: 100%; height: 240px; }
     </div>
     <div class="progress" id="labProg"><div></div></div>
     <div class="panel">
-      <h2>순위 <span class="muted small">검증 수익률 순 (검증 거래 5회 미만은 아래로) · 레버리지 1배 · 종목 평균 · 행을 누르면 상세</span></h2>
+      <h2>순위 <span class="muted small" id="labHead">통과 구간 수 → 검증 수익률 순 · 레버리지 1배 · 종목 평균 · 행을 누르면 상세</span></h2>
       <div class="scroll"><table id="labTbl"><tr><td class="empty">아직 실행하지 않았어요.</td></tr></table></div>
     </div>
     <div class="panel" id="labDetail" style="display:none">
@@ -186,8 +192,11 @@ canvas { display: block; width: 100%; height: 240px; }
         <div class="note" id="ldDesc"></div>
         <div id="ldParams" style="margin-top:8px"></div>
       </div>
+      <h2 style="border-top:1px solid var(--line)">구간별 결과 <span class="muted small">각 구간마다 직전 학습 기간으로 설정을 새로 골라요</span></h2>
+      <div class="scroll"><table id="foldTbl"></table></div>
+      <h2 style="border-top:1px solid var(--line)">종목별 (검증 구간 이어 붙인 누적) <span class="muted small">행을 누르면 차트가 바뀌어요</span></h2>
       <div class="scroll"><table id="ldTbl"></table></div>
-      <div class="legend"><span><i style="background:var(--accent)"></i>전략 (검증 구간)</span><span><i style="background:var(--muted)"></i>그냥 보유</span><span id="ldSym"></span></div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>전략 (검증 구간만)</span><span><i style="background:var(--muted)"></i>그냥 보유</span><span id="ldSym"></span></div>
       <canvas id="ldCanvas"></canvas>
       <h2 style="border-top:1px solid var(--line)">레버리지 시뮬레이션 <span class="muted small">같은 설정·검증 구간을 레버리지만 바꿔서 · 종목당 자산 100%를 증거금으로</span></h2>
       <div class="scroll"><table id="levTbl"></table></div>
@@ -595,11 +604,42 @@ function renderBt(sel) {
 $("btBtn").onclick = runBacktest;
 
 // ---------------- 전략 연구실 ----------------
-let labRows = [], labSel = 0, labSymSel = 0, labRunning = false;
+// 구간(fold)마다: 학습 구간에서 모든 설정 조합을 돌려 최적 설정 선택 → 바로 다음 검증 구간에서 채점.
+// "한 번 나누기"는 구간이 1개인 경우.
+let labRows = [], labSel = 0, labSymSel = 0, labRunning = false, labMeta = null;
 const dataCache = {};
+const DAY = 864e5;
+const checked = id => [...$(id).querySelectorAll("input:checked")].map(i => i.value);
+const firstIdx = (ts, t) => { let lo = 0, hi = ts.length; while (lo < hi) { const m = (lo + hi) >> 1; if (ts[m] < t) lo = m + 1; else hi = m; } return lo; };
+const mddOf = eq => { let pk = -Infinity, m = 0; for (const e of eq) { pk = Math.max(pk, e); m = Math.min(m, e / pk - 1); } return m; };
+const fmtD = ts => new Date(ts).toLocaleDateString("ko-KR", { month: "2-digit", day: "2-digit" });
+
+function foldPlan(mode, days, trainD, testD, now) {
+  const begin = now - days * DAY;
+  if (mode === "single") return [{ single: true, t0: begin }];
+  const out = [];
+  for (let k = 0; ; k++) {
+    const t0 = begin + k * testD * DAY, t1 = t0 + trainD * DAY, t2 = t1 + testD * DAY;
+    if (t2 > now + 36e5) break;
+    out.push({ t0, t1, t2 });
+  }
+  return out;
+}
+function syncLabMode() {
+  const roll = $("labMode").value === "rolling";
+  $("rollBox").style.display = roll ? "" : "none";
+  $("labNote").innerHTML = roll
+    ? `전체 기간을 <b>학습 N일 → 검증 M일</b> 단위로 한 칸씩 밀면서 여러 번 반복해요. 매번 그 시점까지의 학습 구간에서만 최적 설정을 고르고, 바로 다음 <b>처음 보는 구간</b>에서 채점해요. <b>여러 구간에서 꾸준히 +</b>여야 진짜 실력일 가능성이 높아요.`
+    : `과거 데이터를 <b>앞 70%(학습)</b>와 <b>뒤 30%(검증)</b>로 한 번 나눠요. 빠르지만, 어디서 자르느냐에 따라 결과가 크게 흔들릴 수 있어요.`;
+  const n = roll ? foldPlan("rolling", +$("labDays").value, +$("labTrain").value, +$("labTest").value, Date.now()).length : 1;
+  $("labFoldNote").textContent = roll ? (n ? `→ 검증 구간 ${n}개` : "→ 기간이 너무 짧아요") : "";
+}
 function renderLabControls() {
-  const tfs = store.get("cs_lab_tfs", ["5m", "15m"]), sel = store.get("cs_lab_strats", Core.STRATEGIES.map(s => s.id));
-  const cm = store.get("cs_lab_cost", "futTaker"), dr = store.get("cs_lab_dir", "both");
+  const tfs = store.get("cs_lab_tfs", ["5m", "15m", "1h"]), sel = store.get("cs_lab_strats", Core.STRATEGIES.map(s => s.id));
+  const cm = store.get("cs_lab_cost", "futTaker"), dr = store.get("cs_lab_dir", "both"), lm = store.get("cs_lab_mode", { mode: "rolling", days: 180, train: 60, test: 30 });
+  $("labMode").value = lm.mode; $("labDays").value = lm.days; $("labTrain").value = lm.train; $("labTest").value = lm.test;
+  for (const id of ["labMode", "labDays", "labTrain", "labTest"]) $(id).oninput = $(id).onchange = syncLabMode;
+  syncLabMode();
   $("labCost").innerHTML = Object.entries(COST_MODES).map(([k, m]) => `<option value="${k}" ${k === cm ? "selected" : ""}>${m.label}</option>`).join("");
   $("labDir").value = dr;
   const sync = () => {
@@ -611,27 +651,50 @@ function renderLabControls() {
   $("labTfs").innerHTML = TFS.map(t => `<label class="chip"><input type="checkbox" value="${t}" ${tfs.includes(t) ? "checked" : ""}>${t}</label>`).join("");
   $("labStrats").innerHTML = Core.STRATEGIES.map(s => `<label class="chip" title="${esc(s.desc)}"><input type="checkbox" value="${s.id}" ${sel.includes(s.id) ? "checked" : ""}>${s.name} <span class="muted small">${Core.grid(s).length}</span></label>`).join("");
 }
-const checked = id => [...$(id).querySelectorAll("input:checked")].map(i => i.value);
 function verdict(r) {
   if (r.test.trades < 5) return `<span class="pill">거래 적음</span>`;
-  if (r.train.avg > 0 && r.test.avg > 0) return `<span class="pill pass">✅ 통과</span>`;
-  if (r.test.avg > 0) return `<span class="pill warn">⚠️ 검증만 +</span>`;
-  return `<span class="pill fail">❌</span>`;
+  const n = r.folds.length, pos = r.foldPos, ratio = pos / n, tag = n > 1 ? ` ${pos}/${n}` : "";
+  if (n === 1) return r.train.avg > 0 && r.test.avg > 0 ? `<span class="pill pass">✅ 통과</span>` : r.test.avg > 0 ? `<span class="pill warn">⚠️ 검증만 +</span>` : `<span class="pill fail">❌</span>`;
+  if (ratio >= 0.75 && r.test.avg > 0) return `<span class="pill pass">✅${tag}</span>`;
+  if (ratio >= 0.5 && r.test.avg > 0) return `<span class="pill warn">⚠️${tag}</span>`;
+  return `<span class="pill fail">❌${tag}</span>`;
 }
+
+// 구간별 검증 결과를 종목별로 이어 붙임 (각 구간은 그 구간에서 고른 설정으로)
+function chainFolds(r, symIdx, lev) {
+  const sym = r.syms[symIdx], d = r.sets[symIdx], cash = r.opt.startingCash;
+  let cum = 1, liq = 0; const eq = [], trades = [];
+  for (const f of r.folds) {
+    const res = lev == null ? f.test.per[symIdx]
+      : Core.simulate(d.c, r.s, f.p, { ...r.opt, leverage: lev, I: d.I, cm: d.cm, Im: d.Im, symbol: sym, from: f.idx[symIdx].c, to: f.idx[symIdx].d });
+    for (const v of res.equity) eq.push(cum * v);
+    trades.push(...res.trades); liq += res.stats.liquidations || 0;
+    if (res.equity.length) cum *= res.equity[res.equity.length - 1] / cash;
+  }
+  const f0 = r.folds[0].idx[symIdx], fl = r.folds[r.folds.length - 1].idx[symIdx];
+  return { sym, c: d.c, start: f0.c, equity: eq, trades, liq,
+    stats: { totalReturn: cum - 1, trades: trades.length, winRate: trades.length ? trades.filter(t => t.pnl > 0).length / trades.length : 0,
+             maxDrawdown: mddOf(eq), minEquity: eq.length ? Math.min(...eq) / cash - 1 : 0, buyHoldReturn: d.c.close[fl.d - 1] / d.c.close[f0.c] - 1 } };
+}
+
 async function runLab() {
   if (labRunning) return;
-  const days = Math.max(14, Math.min(365, +$("labDays").value || 90)), tfs = checked("labTfs"), ids = checked("labStrats"), syms = symbols();
+  const mode = $("labMode").value, days = Math.max(14, Math.min(365, +$("labDays").value || 180));
+  const trainD = Math.max(7, +$("labTrain").value || 60), testD = Math.max(3, +$("labTest").value || 30);
+  const tfs = checked("labTfs"), ids = checked("labStrats"), syms = symbols(), now = Date.now();
   if (!tfs.length || !ids.length) { toast("봉과 전략을 하나 이상 골라주세요"); return; }
-  store.set("cs_lab_tfs", tfs); store.set("cs_lab_strats", ids);
-  const costKey = $("labCost").value, mode = COST_MODES[costKey], dir = mode.market === "spot" ? "long" : $("labDir").value;
+  const plan = foldPlan(mode, days, trainD, testD, now);
+  if (!plan.length) { toast("전체 기간이 학습+검증보다 길어야 해요"); return; }
+  store.set("cs_lab_tfs", tfs); store.set("cs_lab_strats", ids); store.set("cs_lab_mode", { mode, days, train: trainD, test: testD });
+  const costKey = $("labCost").value, cmode = COST_MODES[costKey], dir = cmode.market === "spot" ? "long" : $("labDir").value;
   store.set("cs_lab_cost", costKey); store.set("cs_lab_dir", dir);
-  const rt = 2 * (mode.fee + mode.slip / 1e4);
+  const rt = 2 * (cmode.fee + cmode.slip / 1e4);
   const strats = ids.map(Core.byId), btn = $("labBtn"), prog = $("labProg"), bar = prog.firstElementChild;
   const setProg = f => { bar.style.width = (f * 100).toFixed(1) + "%"; };
   labRunning = true; btn.disabled = true; prog.style.display = "block"; setProg(0);
   labRows = [];
   try {
-    // 1) 5분봉 데이터 받기 (워밍업용 여유 기간 포함) → 15m·1h는 합쳐서 만듦
+    // 1) 5분봉 받기 (지표 워밍업용 여유 포함) → 15m·1h는 합쳐서 만듦
     const extraDays = tfs.includes("1h") ? 25 : tfs.includes("15m") ? 9 : 3;
     const raw = {};
     for (const sym of syms) {
@@ -642,66 +705,78 @@ async function runLab() {
       }
       raw[sym] = dataCache[key].c;
     }
-    // 2) 데이터셋 준비: 학습/검증 경계
+    // 2) 데이터셋과 구간 경계(봉 번호)
     const sets = {};
-    for (const tf of tfs) for (const sym of syms) {
-      const c = Core.resample(raw[sym], TF_MS["5m"], TF_MS[tf]);
-      const begin = Date.now() - days * 864e5, from0 = Math.max(0, c.ts.findIndex(t => t >= begin));
-      const cmr = Core.mirror(c);
-      sets[tf + sym] = { c, I: Core.makeI(c), cm: cmr, Im: Core.makeI(cmr), from0, split: from0 + Math.floor((c.ts.length - from0) * 0.7) };
-    }
-    const total = tfs.length * strats.reduce((n, s) => n + Core.grid(s).length, 0) * syms.length;
-    let done = 0;
-    const opt = { ...brokerOpts(), positionPct: 1, market: mode.market, feeRate: mode.fee, slippageBps: mode.slip, fundingRate: mode.funding, dir, leverage: 1 };
-    // 3) 전략 × 봉: 학습 구간에서 최적 조합 → 검증 구간 평가
+    for (const tf of tfs) sets[tf] = syms.map(sym => {
+      const c = Core.resample(raw[sym], TF_MS["5m"], TF_MS[tf]), cmr = Core.mirror(c), n = c.ts.length;
+      const idx = plan.map(f => {
+        if (f.single) { const a = firstIdx(c.ts, f.t0), b = a + Math.floor((n - a) * 0.7); return { a, b, c: b, d: n }; }
+        return { a: firstIdx(c.ts, f.t0), b: firstIdx(c.ts, f.t1), c: firstIdx(c.ts, f.t1), d: Math.min(n, firstIdx(c.ts, f.t2)) };
+      });
+      return { c, I: Core.makeI(c), cm: cmr, Im: Core.makeI(cmr), idx };
+    });
+    const total = tfs.length * strats.reduce((n, s) => n + Core.grid(s).length, 0) * syms.length * plan.length;
+    let done = 0, lastYield = Date.now();
+    const opt = { ...brokerOpts(), positionPct: 1, market: cmode.market, feeRate: cmode.fee, slippageBps: cmode.slip, fundingRate: cmode.funding, dir, leverage: 1 };
+    const minTrades = Math.max(5, syms.length * 3);
+    // 3) 전략 × 봉 × 구간
     for (const tf of tfs) for (const s of strats) {
       $("labInfo").textContent = `${s.name} · ${tf} 계산 중…`;
-      let best = null;
-      const minTrades = Math.max(5, syms.length * 3);
-      for (const p of Core.grid(s)) {
-        const res = syms.map(sym => { const d = sets[tf + sym]; return Core.simulate(d.c, s, p, { ...opt, I: d.I, cm: d.cm, Im: d.Im, symbol: sym, from: d.from0, to: d.split }).stats; });
-        const avg = res.reduce((a, r) => a + r.totalReturn, 0) / res.length, trades = res.reduce((a, r) => a + r.trades, 0);
-        const score = trades >= minTrades ? avg : avg - 1;       // 거래가 너무 적은 조합은 후순위
-        if (!best || score > best.score) best = { p, score, avg, trades, per: res };
-        done += syms.length;
-        if (done % 24 < syms.length) { setProg(done / total); await sleep0(); }
+      const ds = sets[tf], folds = [];
+      for (let k = 0; k < plan.length; k++) {
+        let best = null;
+        for (const p of Core.grid(s)) {
+          const res = ds.map((d, j) => Core.simulate(d.c, s, p, { ...opt, I: d.I, cm: d.cm, Im: d.Im, symbol: syms[j], from: d.idx[k].a, to: d.idx[k].b }).stats);
+          const avg = res.reduce((a, r) => a + r.totalReturn, 0) / res.length, trades = res.reduce((a, r) => a + r.trades, 0);
+          const score = trades >= minTrades ? avg : avg - 1;       // 거래가 너무 적은 조합은 후순위
+          if (!best || score > best.score) best = { p, score, avg, trades, per: res };
+          done += syms.length;
+          if (Date.now() - lastYield > 60) { setProg(done / total); await sleep0(); lastYield = Date.now(); }
+        }
+        const per = ds.map((d, j) => Core.simulate(d.c, s, best.p, { ...opt, I: d.I, cm: d.cm, Im: d.Im, symbol: syms[j], from: d.idx[k].c, to: d.idx[k].d }));
+        const st = per.map(r => r.stats), gS = st.reduce((a, r) => a + r.grossSum, 0), gN = st.reduce((a, r) => a + r.grossN, 0);
+        const c0 = ds[0].c, ix = ds[0].idx[k];
+        folds.push({ p: best.p, idx: ds.map(d => d.idx[k]), from: c0.ts[ix.c], to: c0.ts[Math.max(ix.c, ix.d - 1)],
+          train: { avg: best.avg, trades: best.trades, per: best.per },
+          test: { avg: st.reduce((a, r) => a + r.totalReturn, 0) / st.length, trades: st.reduce((a, r) => a + r.trades, 0), per, edge: gN ? gS / gN : NaN } });
       }
-      const per = syms.map(sym => { const d = sets[tf + sym]; return { sym, c: d.c, set: d, ...Core.simulate(d.c, s, best.p, { ...opt, I: d.I, cm: d.cm, Im: d.Im, symbol: sym, from: d.split }) }; });
-      const gS = per.reduce((a, r) => a + r.stats.grossSum, 0), gN = per.reduce((a, r) => a + r.stats.grossN, 0);
-      const st = per.map(r => r.stats), trades = st.reduce((a, r) => a + r.trades, 0), wins = st.reduce((a, r) => a + r.wins, 0), losses = st.reduce((a, r) => a + r.losses, 0);
-      labRows.push({
-        s, tf, p: best.p, costKey, dir, opt, rt,
-        train: { avg: best.avg, trades: best.trades, per: best.per },
-        test: { avg: st.reduce((a, r) => a + r.totalReturn, 0) / st.length, trades,
-          winRate: trades ? per.reduce((a, r) => a + r.trades.filter(t => t.pnl > 0).length, 0) / trades : 0,
-          mdd: Math.min(...st.map(r => r.maxDrawdown)), pf: losses > 0 ? wins / losses : wins > 0 ? Infinity : 0,
-          bh: st.reduce((a, r) => a + r.buyHoldReturn, 0) / st.length, per,
-          edge: gN ? gS / gN : NaN, longs: st.reduce((a, r) => a + r.longs, 0), shorts: st.reduce((a, r) => a + r.shorts, 0) },
-      });
-      labRows.sort((a, b) => (a.test.trades < 5) - (b.test.trades < 5) || b.test.avg - a.test.avg);   // 거래 적은 건 뒤로
-      renderLab(0);
+      const row = { s, tf, p: folds[folds.length - 1].p, folds, costKey, dir, opt, rt, syms, sets: ds, mode };
+      const chained = syms.map((_, j) => chainFolds(row, j));
+      const all = chained.flatMap(x => x.trades), g = all.map(t => t.grossPct).filter(isN);
+      const wins = all.filter(t => t.pnl > 0).reduce((a, t) => a + t.pnl, 0), losses = -all.filter(t => t.pnl <= 0).reduce((a, t) => a + t.pnl, 0);
+      row.train = { avg: folds.reduce((a, f) => a + f.train.avg, 0) / folds.length, trades: folds.reduce((a, f) => a + f.train.trades, 0) };
+      row.test = { avg: chained.reduce((a, x) => a + x.stats.totalReturn, 0) / chained.length, trades: all.length,
+        winRate: all.length ? all.filter(t => t.pnl > 0).length / all.length : 0, mdd: Math.min(...chained.map(x => x.stats.maxDrawdown)),
+        pf: losses > 0 ? wins / losses : wins > 0 ? Infinity : 0, bh: chained.reduce((a, x) => a + x.stats.buyHoldReturn, 0) / chained.length,
+        edge: g.length ? g.reduce((a, v) => a + v, 0) / g.length : NaN,
+        longs: all.filter(t => t.dir > 0).length, shorts: all.filter(t => t.dir < 0).length, per: chained };
+      row.foldPos = folds.filter(f => f.test.avg > 0).length;
+      labRows.push(row);
+      labRows.sort((a, b) => (a.test.trades < 5) - (b.test.trades < 5) || b.foldPos / b.folds.length - a.foldPos / a.folds.length || b.test.avg - a.test.avg);
+      labSel = 0; labSymSel = 0; renderLab(0);
       await sleep0();
     }
     setProg(1);
-    const top = labRows[0], passed = labRows.filter(r => r.train.avg > 0 && r.test.avg > 0 && r.test.trades >= 5).length;
-    const first = raw[syms[0]], spanTxt = `${fmtT(first.ts[0])} ~ ${fmtT(first.ts[first.ts.length - 1])}`;
-    $("labInfo").textContent = `완료 — ${labRows.length}개 비교 · 통과 ${passed}개 · 1위 ${top.s.name} ${top.tf} (검증 ${fmtPct(top.test.avg)})`;
-    log(`연구실 ${days}일 (${spanTxt}) · ${mode.label.split(" — ")[0]} · ${DIR_KO[dir]}: 1위 ${top.s.name} ${top.tf} 검증 ${fmtPct(top.test.avg)} · 통과 ${passed}/${labRows.length}`);
+    const top = labRows[0], passed = labRows.filter(r => r.test.trades >= 5 && r.test.avg > 0 && (r.folds.length > 1 ? r.foldPos / r.folds.length >= 0.75 : r.train.avg > 0)).length;
+    const first = raw[syms[0]];
+    labMeta = { mode, days, trainD, testD, nFolds: plan.length, span: `${fmtT(first.ts[0])} ~ ${fmtT(first.ts[first.ts.length - 1])}`, costKey, dir };
+    const modeTxt = mode === "rolling" ? `롤링 ${trainD}→${testD}일 × ${plan.length}구간` : "70/30";
+    $("labInfo").textContent = `완료 — ${labRows.length}개 비교 · 통과 ${passed}개 · 1위 ${top.s.name} ${top.tf} (검증 ${fmtPct(top.test.avg)}${top.folds.length > 1 ? `, ${top.foldPos}/${top.folds.length}구간 +` : ""})`;
+    log(`연구실 ${days}일 ${modeTxt} · ${cmode.label.split(" — ")[0]} · ${DIR_KO[dir]}: 1위 ${top.s.name} ${top.tf} 검증 ${fmtPct(top.test.avg)} · 통과 ${passed}/${labRows.length}`);
   } catch (e) {
     $("labInfo").textContent = "오류: " + e.message; log("연구실 " + e.message, "err");
   } finally { labRunning = false; btn.disabled = false; setTimeout(() => prog.style.display = "none", 800); }
 }
 function renderLab(sel) {
   labSel = sel;
-  $("labTbl").innerHTML = `<tr><th>#</th><th class="l">전략</th><th>봉</th><th>학습</th><th>검증</th><th>검증 거래</th><th title="검증 구간 롱/숏 거래 수">롱/숏</th><th>승률</th>
+  $("labTbl").innerHTML = `<tr><th>#</th><th class="l">전략</th><th>봉</th><th>판정</th><th>학습 (평균)</th><th>검증 (누적)</th><th>검증 거래</th><th title="검증 구간 롱/숏 거래 수">롱/숏</th><th>승률</th>
       <th title="거래 한 번당 평균 가격 움직임 (수수료·슬리피지 빼기 전)">거래당 (비용 전)</th><th title="수수료 + 슬리피지 왕복">왕복 비용</th><th title="거래당 수익 − 왕복 비용">여유</th>
-      <th>최대 낙폭</th><th>손익비</th><th>그냥 보유</th><th>판정</th></tr>` +
-    labRows.map((r, k) => `<tr class="click ${k === sel ? "sel" : ""}" data-k="${k}"><td>${k + 1}</td><td class="l name">${r.s.name}</td><td>${r.tf}</td>
+      <th>최대 낙폭</th><th>손익비</th><th>그냥 보유</th></tr>` +
+    labRows.map((r, k) => `<tr class="click ${k === sel ? "sel" : ""}" data-k="${k}"><td>${k + 1}</td><td class="l name">${r.s.name}</td><td>${r.tf}</td><td>${verdict(r)}</td>
       <td class="${cls(r.train.avg)}">${fmtPct(r.train.avg)}</td><td class="${cls(r.test.avg)}"><b>${fmtPct(r.test.avg)}</b></td>
       <td>${r.test.trades}</td><td class="muted">${r.test.longs}/${r.test.shorts}</td><td>${(r.test.winRate * 100).toFixed(0)}%</td>
       <td class="${cls(r.test.edge)}">${fmtPct(r.test.edge, 3)}</td><td class="muted">${fmtPct(-r.rt, 3)}</td><td class="${cls(r.test.edge - r.rt)}">${fmtPct(r.test.edge - r.rt, 3)}</td>
-      <td class="down">${fmtPct(r.test.mdd)}</td>
-      <td>${fmtPF(r.test.pf)}</td><td class="${cls(r.test.bh)}">${fmtPct(r.test.bh)}</td><td>${verdict(r)}</td></tr>`).join("");
+      <td class="down">${fmtPct(r.test.mdd)}</td><td>${fmtPF(r.test.pf)}</td><td class="${cls(r.test.bh)}">${fmtPct(r.test.bh)}</td></tr>`).join("");
   $("labTbl").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { labSymSel = 0; renderLab(+tr.dataset.k); });
   renderLabDetail();
 }
@@ -711,29 +786,31 @@ function renderLabDetail() {
   $("labDetail").style.display = "block";
   $("ldTitle").textContent = `${r.s.name} · ${r.tf} · ${COST_MODES[r.costKey].label.split(" — ")[0]} · ${DIR_KO[r.dir]}`;
   $("ldDesc").textContent = r.s.desc;
-  $("ldParams").innerHTML = `<span class="muted small">학습 구간에서 고른 설정: </span>` + paramChips(r.s, r.p);
-  $("ldTbl").innerHTML = `<tr><th>종목</th><th>학습 수익률</th><th>학습 거래</th><th>검증 수익률</th><th>검증 거래</th><th>승률</th><th>최대 낙폭</th><th>그냥 보유</th><th class="l">검증 청산 사유</th></tr>` +
-    r.test.per.map((t, k) => { const tr = r.train.per[k];
-      return `<tr class="click ${k === labSymSel ? "sel" : ""}" data-k="${k}"><td>${t.sym}</td><td class="${cls(tr.totalReturn)}">${fmtPct(tr.totalReturn)}</td><td>${tr.trades}</td>
-        <td class="${cls(t.stats.totalReturn)}">${fmtPct(t.stats.totalReturn)}</td><td>${t.stats.trades}</td><td>${(t.stats.winRate * 100).toFixed(0)}%</td>
-        <td class="down">${fmtPct(t.stats.maxDrawdown)}</td><td class="${cls(t.stats.buyHoldReturn)}">${fmtPct(t.stats.buyHoldReturn)}</td>
-        <td class="l small muted">${reasonCounts(t.trades)}</td></tr>`; }).join("");
+  $("ldParams").innerHTML = `<span class="muted small">${r.folds.length > 1 ? "가장 최근 구간에서 고른 설정 (적용 시 이 값 사용)" : "학습 구간에서 고른 설정"}: </span>` + paramChips(r.s, r.p);
+  $("foldTbl").innerHTML = `<tr><th class="l">검증 기간</th><th class="l">그 구간에서 고른 설정</th><th>학습</th><th>검증</th><th>거래</th><th>거래당</th><th>여유</th></tr>` +
+    r.folds.map(f => `<tr><td class="l">${fmtD(f.from)} ~ ${fmtD(f.to)}</td><td class="l small muted" style="font-family:var(--sans)">${esc(paramText(r.s, f.p, true) || "고정")}</td>
+      <td class="${cls(f.train.avg)}">${fmtPct(f.train.avg)}</td><td class="${cls(f.test.avg)}"><b>${fmtPct(f.test.avg)}</b></td><td>${f.test.trades}</td>
+      <td class="${cls(f.test.edge)}">${fmtPct(f.test.edge, 3)}</td><td class="${cls(f.test.edge - r.rt)}">${fmtPct(f.test.edge - r.rt, 3)}</td></tr>`).join("");
+  $("ldTbl").innerHTML = `<tr><th>종목</th><th>검증 누적</th><th>거래</th><th>승률</th><th>최대 낙폭</th><th>그냥 보유</th><th class="l">청산 사유</th></tr>` +
+    r.test.per.map((t, k) => `<tr class="click ${k === labSymSel ? "sel" : ""}" data-k="${k}"><td>${t.sym}</td>
+      <td class="${cls(t.stats.totalReturn)}">${fmtPct(t.stats.totalReturn)}</td><td>${t.stats.trades}</td><td>${(t.stats.winRate * 100).toFixed(0)}%</td>
+      <td class="down">${fmtPct(t.stats.maxDrawdown)}</td><td class="${cls(t.stats.buyHoldReturn)}">${fmtPct(t.stats.buyHoldReturn)}</td>
+      <td class="l small muted">${reasonCounts(t.trades)}</td></tr>`).join("");
   $("ldTbl").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { labSymSel = +tr.dataset.k; renderLabDetail(); });
   $("ldSym").textContent = `· ${r.test.per[labSymSel].sym}`;
-  drawChart($("ldCanvas"), r.test.per[labSymSel], +S.startingCash);
+  drawChart($("ldCanvas"), r.test.per[labSymSel], r.opt.startingCash);
   renderLev(r);
 }
 function renderLev(r) {
   if (r.opt.market !== "futures") { $("levTbl").innerHTML = `<tr><td class="empty">현물은 레버리지가 없어요. 비용 모드를 선물로 바꿔서 연구하면 볼 수 있어요.</td></tr>`; return; }
-  const rows = [1, 2, 3, 5, 10, 20].map(lev => {
-    const res = r.test.per.map(t => Core.simulate(t.set.c, r.s, r.p, { ...r.opt, leverage: lev, I: t.set.I, cm: t.set.cm, Im: t.set.Im, symbol: t.sym, from: t.set.split }).stats);
-    return { lev, avg: res.reduce((a, x) => a + x.totalReturn, 0) / res.length, worst: Math.min(...res.map(x => x.totalReturn)),
-             mdd: Math.min(...res.map(x => x.maxDrawdown)), liq: res.reduce((a, x) => a + x.liquidations, 0), low: Math.min(...res.map(x => x.minEquity)) };
+  if (!r.levRows) r.levRows = [1, 2, 3, 5, 10, 20].map(lev => {
+    const res = r.syms.map((_, j) => chainFolds(r, j, lev));
+    return { lev, avg: res.reduce((a, x) => a + x.stats.totalReturn, 0) / res.length, worst: Math.min(...res.map(x => x.stats.totalReturn)),
+             mdd: Math.min(...res.map(x => x.stats.maxDrawdown)), liq: res.reduce((a, x) => a + x.liq, 0), low: Math.min(...res.map(x => x.stats.minEquity)) };
   });
   $("levTbl").innerHTML = `<tr><th>레버리지</th><th>검증 수익률 (평균)</th><th>가장 나쁜 종목</th><th>최대 낙폭</th><th>자산 최저점</th><th>강제청산</th></tr>` +
-    rows.map(x => `<tr><td>${x.lev}배</td><td class="${cls(x.avg)}"><b>${fmtPct(x.avg)}</b></td><td class="${cls(x.worst)}">${fmtPct(x.worst)}</td>
+    r.levRows.map(x => `<tr><td>${x.lev}배</td><td class="${cls(x.avg)}"><b>${fmtPct(x.avg)}</b></td><td class="${cls(x.worst)}">${fmtPct(x.worst)}</td>
       <td class="down">${fmtPct(x.mdd)}</td><td class="${cls(x.low)}">${fmtPct(x.low)}</td><td class="${x.liq ? "down" : "muted"}">${x.liq ? `💥 ${x.liq}회` : "0"}</td></tr>`).join("");
-  r.levRows = rows;
 }
 $("labBtn").onclick = runLab;
 $("applyBtn").onclick = () => {
@@ -741,12 +818,14 @@ $("applyBtn").onclick = () => {
   const m = COST_MODES[r.costKey], n = Object.keys(broker.positions).length, mkChange = m.market !== S.market;
   const levTxt = m.market === "futures" ? ` · 레버리지 ${S.market === "futures" ? liveLev() : 1}배 (설정에서 변경)` : "";
   if (!confirm(`실시간 모의매매를 '${r.s.name} · ${r.tf} · ${m.market === "futures" ? "선물" : "현물"} ${DIR_KO[r.dir]}'로 바꿀까요?${levTxt}` +
+    (r.folds.length > 1 ? `\n가장 최근 구간에서 고른 설정을 써요.` : "") +
     (mkChange ? `\n시장이 바뀌어서 모의 계좌가 새로 시작돼요.` : n ? `\n보유 중인 ${n}종목은 새 전략의 청산 규칙으로 관리돼요.` : ""))) return;
   S.strategyId = r.s.id; S.interval = r.tf; S.params = { ...r.p };
   if (r.costKey !== "zero") { S.feeRate = m.fee; S.slippageBps = m.slip; S.fundingRate = m.funding || S.fundingRate; }
-  S.market = m.market; S.direction = r.dir; if (!mkChange && m.market === "spot") S.leverage = 1;
-  if (mkChange) { if (m.market === "spot") S.leverage = 1; store.set("cs_settings", S); switchMarket(); }
-  store.set("cs_settings", S); lastEval = {}; saveLive();
+  S.market = m.market; S.direction = r.dir; if (m.market === "spot") S.leverage = 1;
+  store.set("cs_settings", S);
+  if (mkChange) switchMarket();
+  lastEval = {}; saveLive();
   if (running) startTicker();
   log(`전략 변경 → ${r.s.name} · ${r.tf} · ${marketText()} (${paramText(r.s, r.p, true)})`);
   renderSettings(); renderLive(); toast("적용했어요");
@@ -847,8 +926,8 @@ $("copyBtn").onclick = async () => {
     `자산 ${fmtN(eq)} (${fmtPct(eq / broker.startingCash - 1)}) | 현금 ${fmtN(broker.cash)} | 거래 ${broker.nTrades}회 승 ${broker.nWins}`,
     `보유: ${Object.entries(broker.positions).map(([s, p]) => `${s} ${fmtPct((prices[s] ?? p.entryPrice) / p.entryPrice - 1)}`).join(", ") || "없음"}`,
     btResults.length ? `백테스트: ${btResults.map(r => `${r.sym} ${fmtPct(r.stats.totalReturn)} (${r.stats.trades}회, 승률 ${(r.stats.winRate * 100).toFixed(0)}%, 보유 ${fmtPct(r.stats.buyHoldReturn)})`).join(" / ")}` : "",
-    labRows.length ? `연구실 (${$("labDays").value}일, 학습70/검증30, ${symbols().join("/")}, ${COST_MODES[labRows[0].costKey].label}, ${DIR_KO[labRows[0].dir]}, 1배):\n` + labRows.slice(0, 10).map((r, k) =>
-      `  #${k + 1} ${r.s.name} ${r.tf} | 검증 ${fmtPct(r.test.avg)} ${r.test.trades}회(L${r.test.longs}/S${r.test.shorts}) 승률 ${(r.test.winRate * 100).toFixed(0)}% MDD ${fmtPct(r.test.mdd)} PF ${fmtPF(r.test.pf)} | 거래당 ${fmtPct(r.test.edge, 3)} 여유 ${fmtPct(r.test.edge - r.rt, 3)} | 학습 ${fmtPct(r.train.avg)} ${r.train.trades}회 | 보유 ${fmtPct(r.test.bh)} | ${paramText(r.s, r.p, true)}`).join("\n") : "",
+    labRows.length && labMeta ? `연구실 (${labMeta.days}일 ${labMeta.mode === "rolling" ? `롤링 학습${labMeta.trainD}→검증${labMeta.testD}일 × ${labMeta.nFolds}구간` : "학습70/검증30"}, ${symbols().join("/")}, ${COST_MODES[labMeta.costKey].label}, ${DIR_KO[labMeta.dir]}, 1배):\n` + labRows.slice(0, 10).map((r, k) =>
+      `  #${k + 1} ${r.s.name} ${r.tf} | ${r.folds.length > 1 ? `+구간 ${r.foldPos}/${r.folds.length} [${r.folds.map(f => fmtPct(f.test.avg, 1)).join(" ")}] | ` : ""}검증 ${fmtPct(r.test.avg)} ${r.test.trades}회(L${r.test.longs}/S${r.test.shorts}) 승률 ${(r.test.winRate * 100).toFixed(0)}% MDD ${fmtPct(r.test.mdd)} PF ${fmtPF(r.test.pf)} | 거래당 ${fmtPct(r.test.edge, 3)} 여유 ${fmtPct(r.test.edge - r.rt, 3)} | 학습 ${fmtPct(r.train.avg)} | 보유 ${fmtPct(r.test.bh)} | 최근설정 ${paramText(r.s, r.p, true)}`).join("\n") : "",
     labRows[labSel]?.levRows ? `레버리지 (${labRows[labSel].s.name} ${labRows[labSel].tf}): ` + labRows[labSel].levRows.map(x => `${x.lev}배 ${fmtPct(x.avg)} MDD ${fmtPct(x.mdd)}${x.liq ? ` 청산${x.liq}` : ""}`).join(" / ") : "",
     `일반 설정: 종목 ${S.symbols} · 비중 ${S.positionPct} · 최대 ${S.maxPositions}종목 · 수수료 ${S.feeRate} · 슬리피지 ${S.slippageBps}bp · 펀딩 ${S.fundingRate}`,
     "최근 로그:", ...logs.slice(-12).map(l => `  ${fmtT(l.t)} ${l.msg}`),
