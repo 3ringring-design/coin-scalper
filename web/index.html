@@ -17,7 +17,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); }
-.wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+.wrap { max-width: 1140px; margin: 0 auto; padding: 16px; }
 header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 h1 { font: 600 20px var(--mono); margin: 0; letter-spacing: -0.5px; }
 h1 span { color: var(--accent); }
@@ -28,8 +28,8 @@ h1 span { color: var(--accent); }
 .dot.ok { background: var(--up); box-shadow: 0 0 8px var(--up); }
 .dot.bad { background: var(--down); }
 .spacer { flex: 1; }
-nav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
-nav button { background: none; border: 0; color: var(--muted); padding: 10px 14px; font: 500 14px var(--sans); cursor: pointer; border-bottom: 2px solid transparent; }
+nav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; overflow-x: auto; }
+nav button { background: none; border: 0; color: var(--muted); padding: 10px 14px; font: 500 14px var(--sans); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
 nav button.on { color: var(--text); border-bottom-color: var(--accent); }
 .tab { display: none; } .tab.on { display: block; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
@@ -37,6 +37,7 @@ nav button.on { color: var(--text); border-bottom-color: var(--accent); }
 .btn:hover { border-color: #3a4554; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
 .btn.stop { background: #3a1517; border-color: #6b2226; color: #ffb3b5; }
+.btn.small { padding: 5px 10px; font-size: 13px; }
 .btn:disabled { opacity: .5; cursor: default; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
@@ -46,34 +47,49 @@ nav button.on { color: var(--text); border-bottom-color: var(--accent); }
 .card .v { font: 600 20px var(--mono); margin-top: 2px; }
 .up { color: var(--up); } .down { color: var(--down); }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
-.panel h2 { font: 600 13px var(--sans); margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+.panel h2 { font: 600 13px var(--sans); margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pad { padding: 12px 14px; }
 .scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font: 13px var(--mono); }
 th, td { padding: 7px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 400; font-family: var(--sans); font-size: 12px; }
 th:first-child, td:first-child { text-align: left; }
+td.l, th.l { text-align: left; }
+td.name { font-family: var(--sans); }
 tr:last-child td { border-bottom: 0; }
 tr.click { cursor: pointer; } tr.click:hover td { background: var(--panel2); }
 tr.sel td { background: var(--panel2); }
-.pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--panel2); color: var(--muted); }
-.pill.hold { background: #13301f; color: var(--up); }
-.pill.near { background: #3a2f10; color: var(--accent); }
-.conds { letter-spacing: 2px; }
+tr.sel td:first-child { box-shadow: inset 3px 0 var(--accent); }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font: 12px var(--sans); background: var(--panel2); color: var(--muted); }
+.pill.hold, .pill.pass { background: #13301f; color: var(--up); }
+.pill.near, .pill.warn { background: #3a2f10; color: var(--accent); }
+.pill.fail { background: #3a1517; color: #ffb3b5; }
+.conds { letter-spacing: 2px; cursor: help; }
 .log { font: 12px/1.6 var(--mono); padding: 8px 14px; max-height: 260px; overflow-y: auto; }
 .log div { white-space: pre-wrap; }
 .log .t { color: var(--muted); margin-right: 8px; }
 .log .err { color: var(--down); } .log .buy { color: var(--up); } .log .sell { color: var(--accent); }
-.empty { padding: 14px; color: var(--muted); font-size: 13px; }
+.empty { padding: 14px; color: var(--muted); font-size: 13px; font-family: var(--sans); white-space: normal; text-align: left !important; }
 .form { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; padding: 14px; }
 .form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.form input, .form select, .row input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font: 13px var(--mono); }
+.form input, .form select, .row input, .row select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font: 13px var(--mono); }
 .form .wide { grid-column: 1 / -1; }
+.form h3 { grid-column: 1 / -1; margin: 6px 0 -4px; font: 600 13px var(--sans); color: var(--text); }
 .hint { color: var(--muted); font-size: 11px; }
 canvas { display: block; width: 100%; height: 240px; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); padding: 8px 14px 0; }
 .legend i { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 5px; }
 .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
-.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--accent); color: var(--accent-ink); padding: 8px 16px; border-radius: 8px; font-weight: 700; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; font-size: 13px; cursor: pointer; background: var(--panel2); }
+.chip input { margin: 0; }
+.kv { display: inline-block; font: 12px var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; margin: 2px 4px 2px 0; }
+.progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin: -6px 0 14px; display: none; }
+.progress div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.strat-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.strat-bar b { font-weight: 700; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.7; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--accent); color: var(--accent-ink); padding: 8px 16px; border-radius: 8px; font-weight: 700; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 9; }
 .toast.on { opacity: 1; }
 @media (max-width: 700px) {
   .cards { grid-template-columns: repeat(2, 1fr); }
@@ -95,12 +111,17 @@ canvas { display: block; width: 100%; height: 240px; }
 
   <nav>
     <button data-tab="live" class="on">실시간 모의매매</button>
+    <button data-tab="lab">전략 연구실</button>
     <button data-tab="bt">백테스트</button>
     <button data-tab="set">설정</button>
   </nav>
 
   <!-- 실시간 -->
   <section class="tab on" id="tab-live">
+    <div class="strat-bar">
+      <span class="muted small">현재 전략</span><b id="curStrat"></b><span id="curParams"></span>
+      <span class="spacer"></span><button class="btn small" data-goto="set">변경</button>
+    </div>
     <div class="row">
       <button class="btn primary" id="runBtn">▶ 시작</button>
       <span class="muted small" id="tickInfo">정지됨</span>
@@ -114,7 +135,7 @@ canvas { display: block; width: 100%; height: 240px; }
       <div class="card"><div class="k">거래 / 승률</div><div class="v" id="cTr">–</div></div>
     </div>
     <div class="panel">
-      <h2>종목 감시 <span class="muted small">진입조건: 추세↑ · 볼린저 하단 이탈 · RSI 과매도</span></h2>
+      <h2>종목 감시 <span class="muted small">● 충족 ○ 미충족 — 동그라미에 마우스를 올리면 조건 이름이 보여요</span></h2>
       <div class="scroll"><table id="watchTbl"></table></div>
     </div>
     <div class="panel">
@@ -127,6 +148,45 @@ canvas { display: block; width: 100%; height: 240px; }
     </div>
   </section>
 
+  <!-- 전략 연구실 -->
+  <section class="tab" id="tab-lab">
+    <div class="panel">
+      <h2>전략 연구실</h2>
+      <div class="pad">
+        <div class="note" style="margin-bottom:12px">
+          과거 데이터를 <b>앞 70%(학습)</b>와 <b>뒤 30%(검증)</b>로 나눠요. 각 전략의 설정 조합을 학습 구간에서 모두 돌려 가장 좋은 걸 고르고,
+          그 설정 그대로 <b>한 번도 안 본 검증 구간</b>에서 성적을 매겨요. 검증에서도 수익이 나야 진짜로 통할 가능성이 있어요.
+        </div>
+        <div class="row">
+          <label class="muted small">기간</label>
+          <input type="number" id="labDays" value="90" min="14" max="365" style="width:80px"><span class="muted small">일</span>
+          <span class="muted small" style="margin-left:8px">봉</span>
+          <span class="chips" id="labTfs"></span>
+        </div>
+        <div class="chips" id="labStrats" style="margin-bottom:14px"></div>
+        <div class="row" style="margin-bottom:0">
+          <button class="btn primary" id="labBtn">연구 시작</button>
+          <span class="muted small" id="labInfo">종목은 설정 탭의 종목을 써요.</span>
+        </div>
+      </div>
+    </div>
+    <div class="progress" id="labProg"><div></div></div>
+    <div class="panel">
+      <h2>순위 <span class="muted small">검증 수익률 순 (검증 거래 5회 미만은 아래로) · 종목 평균 · 행을 누르면 상세</span></h2>
+      <div class="scroll"><table id="labTbl"><tr><td class="empty">아직 실행하지 않았어요.</td></tr></table></div>
+    </div>
+    <div class="panel" id="labDetail" style="display:none">
+      <h2><span id="ldTitle"></span><button class="btn primary small" id="applyBtn">이 전략을 실시간 모의매매에 적용</button></h2>
+      <div class="pad">
+        <div class="note" id="ldDesc"></div>
+        <div id="ldParams" style="margin-top:8px"></div>
+      </div>
+      <div class="scroll"><table id="ldTbl"></table></div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>전략 (검증 구간)</span><span><i style="background:var(--muted)"></i>그냥 보유</span><span id="ldSym"></span></div>
+      <canvas id="ldCanvas"></canvas>
+    </div>
+  </section>
+
   <!-- 백테스트 -->
   <section class="tab" id="tab-bt">
     <div class="row">
@@ -134,7 +194,7 @@ canvas { display: block; width: 100%; height: 240px; }
       <input type="number" id="btDays" value="30" min="3" max="365" style="width:80px">
       <label class="muted small">일</label>
       <button class="btn primary" id="btBtn">백테스트 실행</button>
-      <span class="muted small" id="btInfo">설정의 종목·전략으로 과거 데이터를 재생해요. 종목별로 전액 투자 기준.</span>
+      <span class="muted small" id="btInfo">현재 전략·설정으로 과거 데이터를 재생해요. 종목별 전액 투자 기준.</span>
     </div>
     <div class="panel">
       <h2>결과 <span class="muted small">행을 누르면 아래 차트가 바뀌어요</span></h2>
@@ -156,6 +216,7 @@ canvas { display: block; width: 100%; height: 240px; }
     <div class="panel">
       <h2>설정 <span class="muted small">이 브라우저에 저장돼요</span></h2>
       <div class="form" id="setForm"></div>
+      <div class="form" id="stratForm" style="padding-top:0"></div>
       <div class="row" style="padding:0 14px 14px">
         <button class="btn primary" id="saveBtn">저장</button>
         <button class="btn" id="defBtn">기본값으로</button>
@@ -166,169 +227,30 @@ canvas { display: block; width: 100%; height: 240px; }
 </div>
 <div class="toast" id="toast"></div>
 
-<script>
-// ===================== CORE-START (전략·브로커·백테스트: 파이썬 버전과 동일 로직) =====================
-const Core = (() => {
-  function ema(x, n) {
-    const a = 2 / (n + 1), out = new Array(x.length);
-    let prev;
-    for (let i = 0; i < x.length; i++) { prev = i === 0 ? x[0] : a * x[i] + (1 - a) * prev; out[i] = prev; }
-    return out;
-  }
-  function rsi(c, n) {
-    const out = new Array(c.length).fill(NaN);
-    let ag = 0, al = 0;
-    for (let i = 1; i < c.length; i++) {
-      const d = c[i] - c[i - 1], g = Math.max(d, 0), l = Math.max(-d, 0);
-      if (i === 1) { ag = g; al = l; } else { ag += (g - ag) / n; al += (l - al) / n; }
-      out[i] = al === 0 ? (ag === 0 ? NaN : 100) : 100 - 100 / (1 + ag / al);
-    }
-    return out;
-  }
-  function bollinger(c, n, k) {
-    const mid = new Array(c.length).fill(NaN), up = mid.slice(), low = mid.slice();
-    for (let i = n - 1; i < c.length; i++) {
-      let s = 0; for (let j = i - n + 1; j <= i; j++) s += c[j];
-      const m = s / n; let v = 0;
-      for (let j = i - n + 1; j <= i; j++) v += (c[j] - m) ** 2;
-      const sd = Math.sqrt(v / n);
-      mid[i] = m; up[i] = m + k * sd; low[i] = m - k * sd;
-    }
-    return { mid, up, low };
-  }
-  const warmup = p => Math.max(p.emaTrend * 2, p.bbPeriod, p.rsiPeriod * 5);
-
-  function addIndicators(c, p) {
-    const bb = bollinger(c.close, p.bbPeriod, p.bbStd);
-    return { ema: ema(c.close, p.emaTrend), mid: bb.mid, up: bb.up, low: bb.low, rsi: rsi(c.close, p.rsiPeriod) };
-  }
-  function conditions(c, ind, i, p) {
-    return [c.close[i] > ind.ema[i], c.close[i] < ind.low[i], ind.rsi[i] < p.rsiEntry];
-  }
-  function entrySignal(c, ind, i, p) {
-    if ([c.close[i], ind.ema[i], ind.low[i], ind.rsi[i]].some(v => v === undefined || Number.isNaN(v))) return false;
-    return conditions(c, ind, i, p).every(Boolean);
-  }
-  // 한 캔들에서 손절·익절 동시 도달 시 보수적으로 손절
-  function exitSignal(entry, barsHeld, high, low, close, bbMid, p) {
-    const sl = entry * (1 - p.stopLossPct), tp = entry * (1 + p.takeProfitPct);
-    if (low <= sl) return { reason: "stop_loss", price: sl };
-    if (high >= tp) return { reason: "take_profit", price: tp };
-    if (p.midExit && !Number.isNaN(bbMid) && close >= bbMid && close >= entry * (1 + p.midExitMinPct))
-      return { reason: "mid_band", price: close };
-    if (barsHeld >= p.maxHoldBars) return { reason: "time_exit", price: close };
-    return null;
-  }
-
-  class PaperBroker {
-    constructor(startingCash, feeRate, slippageBps, state) {
-      this.feeRate = feeRate; this.slip = slippageBps / 10000;
-      Object.assign(this, { startingCash, cash: startingCash, positions: {}, trades: [], nTrades: 0, nWins: 0, realizedPnl: 0 }, state || {});
-    }
-    toJSON() {
-      const { startingCash, cash, positions, nTrades, nWins, realizedPnl } = this;
-      return { startingCash, cash, positions, trades: this.trades.slice(-500), nTrades, nWins, realizedPnl };
-    }
-    buy(symbol, price, quote, candleTs, when) {
-      quote = Math.min(quote, this.cash);
-      const fill = price * (1 + this.slip), fee = quote * this.feeRate, qty = (quote - fee) / fill;
-      this.cash -= quote;
-      const pos = { qty, entryPrice: fill, cost: quote, entryTime: when, entryCandleTs: candleTs };
-      this.positions[symbol] = pos;
-      return pos;
-    }
-    sell(symbol, price, reason, when) {
-      const pos = this.positions[symbol]; delete this.positions[symbol];
-      const fill = price * (1 - this.slip), gross = pos.qty * fill, proceeds = gross - gross * this.feeRate;
-      this.cash += proceeds;
-      const pnl = proceeds - pos.cost;
-      this.nTrades++; if (pnl > 0) this.nWins++; this.realizedPnl += pnl;
-      const t = { symbol, entryTime: pos.entryTime, exitTime: when, entryPrice: pos.entryPrice, exitPrice: fill,
-                  qty: pos.qty, cost: pos.cost, proceeds, pnl, pnlPct: pnl / pos.cost, reason };
-      this.trades.push(t);
-      return t;
-    }
-    equity(prices) {
-      let v = this.cash;
-      for (const [s, pos] of Object.entries(this.positions)) v += pos.qty * (prices[s] ?? pos.entryPrice);
-      return v;
-    }
-  }
-
-  function simulate(c, p, o) {
-    const sym = o.symbol || "SYM", ind = addIndicators(c, p), n = c.close.length, w = warmup(p);
-    const b = new PaperBroker(o.startingCash, o.feeRate, o.slippageBps);
-    let entryI = null, lastExitI = -1e9;
-    const equity = [];
-    for (let i = w; i < n; i++) {
-      if (entryI === null && i - lastExitI > o.cooldownBars && entrySignal(c, ind, i - 1, p)) {
-        const size = Math.min(b.equity({ [sym]: c.open[i] }) * o.positionPct, b.cash);
-        if (size >= (o.minOrder ?? 10)) { b.buy(sym, c.open[i], size, c.ts[i - 1], c.ts[i]); entryI = i; }
-      }
-      if (entryI !== null) {
-        const pos = b.positions[sym];
-        const r = exitSignal(pos.entryPrice, i - entryI, c.high[i], c.low[i], c.close[i], ind.mid[i], p);
-        if (r) { b.sell(sym, r.price, r.reason, c.ts[i]); entryI = null; lastExitI = i; }
-      }
-      equity.push(b.equity({ [sym]: c.close[i] }));
-    }
-    if (entryI !== null) { b.sell(sym, c.close[n - 1], "end_of_data", c.ts[n - 1]); equity[equity.length - 1] = b.equity({}); }
-    const tr = b.trades, wins = tr.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0),
-          losses = -tr.filter(t => t.pnl <= 0).reduce((s, t) => s + t.pnl, 0);
-    let peak = -Infinity, mdd = 0;
-    for (const e of equity) { peak = Math.max(peak, e); mdd = Math.min(mdd, e / peak - 1); }
-    const stats = {
-      trades: tr.length,
-      winRate: tr.length ? tr.filter(t => t.pnl > 0).length / tr.length : 0,
-      totalReturn: equity.length ? equity[equity.length - 1] / o.startingCash - 1 : 0,
-      maxDrawdown: equity.length ? mdd : 0,
-      profitFactor: losses > 0 ? wins / losses : Infinity,
-      buyHoldReturn: n > w ? c.close[n - 1] / c.close[w] - 1 : NaN,
-    };
-    return { stats, trades: tr, equity, start: w };
-  }
-
-  return { ema, rsi, bollinger, warmup, addIndicators, conditions, entrySignal, exitSignal, PaperBroker, simulate };
-})();
-if (typeof module !== "undefined") module.exports = Core;
-// ===================== CORE-END =====================
-</script>
-
+<script src="core.js?v=__SHA__"></script>
 <script>
 (() => {
 "use strict";
 const BUILD = "__BUILD__";
 const $ = id => document.getElementById(id);
+const sleep0 = () => new Promise(r => setTimeout(r, 0));
 
 // ---------------- 설정 ----------------
-const DEFAULTS = {
-  symbols: "BTCUSDT, ETHUSDT, SOLUSDT", interval: "5m", pollSeconds: 15, candlesLimit: 500,
-  startingCash: 1000, feeRate: 0.001, slippageBps: 5,
-  positionPct: 0.25, maxPositions: 3, minOrder: 10, cooldownBars: 3,
-  emaTrend: 200, bbPeriod: 20, bbStd: 2, rsiPeriod: 14, rsiEntry: 35,
-  takeProfitPct: 0.01, stopLossPct: 0.006, maxHoldBars: 24, midExit: true, midExitMinPct: 0.003,
+const GENERAL = {
+  symbols: "BTCUSDT, ETHUSDT, SOLUSDT", pollSeconds: 15, startingCash: 1000, feeRate: 0.001, slippageBps: 5,
+  positionPct: 0.25, maxPositions: 3, minOrder: 10, cooldownBars: 3, strategyId: "v1", interval: "5m", params: null,
 };
-const FIELDS = [
-  ["symbols", "종목 (쉼표로 구분)", "text", "예: BTCUSDT, ETHUSDT", "wide"],
-  ["interval", "캔들 간격", ["1m", "3m", "5m", "15m", "1h"]],
+const GEN_FIELDS = [
+  ["symbols", "종목 (쉼표로 구분)", "text", "예: BTCUSDT, ETHUSDT, XRPUSDT", "wide"],
   ["pollSeconds", "확인 주기 (초)", "number"],
   ["positionPct", "1회 진입 비중 (0.25 = 25%)", "number"],
   ["maxPositions", "동시 보유 최대 종목 수", "number"],
-  ["cooldownBars", "청산 후 재진입 대기 (캔들)", "number"],
+  ["cooldownBars", "청산 후 재진입 대기 (봉)", "number"],
   ["startingCash", "시작 자금 (USDT)", "number"],
   ["feeRate", "수수료율 (0.001 = 0.1%)", "number"],
   ["slippageBps", "슬리피지 (bp, 5 = 0.05%)", "number"],
-  ["emaTrend", "추세 EMA 기간", "number"],
-  ["bbPeriod", "볼린저 기간", "number"],
-  ["bbStd", "볼린저 표준편차 배수", "number"],
-  ["rsiPeriod", "RSI 기간", "number"],
-  ["rsiEntry", "RSI 진입 기준 (미만)", "number"],
-  ["takeProfitPct", "익절 (0.01 = +1%)", "number"],
-  ["stopLossPct", "손절 (0.006 = −0.6%)", "number"],
-  ["maxHoldBars", "최대 보유 캔들 수", "number"],
-  ["midExit", "중심선 복귀 시 청산", ["true", "false"]],
-  ["midExitMinPct", "중심선 청산 최소 수익", "number"],
 ];
+const TFS = ["5m", "15m", "1h"];
 const TF_MS = { "1m": 6e4, "3m": 18e4, "5m": 3e5, "15m": 9e5, "1h": 36e5 };
 
 const store = {
@@ -336,21 +258,28 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
   del(k) { try { localStorage.removeItem(k); } catch {} },
 };
-let S = { ...DEFAULTS, ...store.get("cs_settings", {}) };
+let S = { ...GENERAL };
+{ const saved = store.get("cs_settings", {}); for (const k in GENERAL) if (k in saved) S[k] = saved[k]; }
+if (!TFS.includes(S.interval)) S.interval = "5m";
+const strat = () => Core.byId(S.strategyId);
+const params = () => ({ ...Core.defaults(strat()), ...(S.params || {}) });
 const symbols = () => S.symbols.split(/[\s,]+/).map(s => s.replace("/", "").toUpperCase()).filter(Boolean);
-const P = () => ({ emaTrend: +S.emaTrend, bbPeriod: +S.bbPeriod, bbStd: +S.bbStd, rsiPeriod: +S.rsiPeriod, rsiEntry: +S.rsiEntry,
-  takeProfitPct: +S.takeProfitPct, stopLossPct: +S.stopLossPct, maxHoldBars: +S.maxHoldBars,
-  midExit: S.midExit === true || S.midExit === "true", midExitMinPct: +S.midExitMinPct });
+const brokerOpts = () => ({ startingCash: +S.startingCash, feeRate: +S.feeRate, slippageBps: +S.slippageBps, cooldownBars: +S.cooldownBars, minOrder: +S.minOrder });
 
 // ---------------- 포맷 ----------------
-const fmtP = x => x == null || Number.isNaN(x) ? "–" : x >= 1000 ? x.toLocaleString("en-US", { maximumFractionDigits: 2 }) : x >= 1 ? x.toFixed(4) : x.toPrecision(5);
-const fmtN = (x, d = 2) => x == null || Number.isNaN(x) ? "–" : x.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
-const fmtPct = (x, d = 2) => x == null || Number.isNaN(x) ? "–" : (x >= 0 ? "+" : "") + (x * 100).toFixed(d) + "%";
+const isN = x => typeof x === "number" && Number.isFinite(x);
+const fmtP = x => !isN(x) ? "–" : x >= 1000 ? x.toLocaleString("en-US", { maximumFractionDigits: 2 }) : x >= 1 ? x.toFixed(4) : x.toPrecision(5);
+const fmtN = (x, d = 2) => !isN(x) ? "–" : x.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmtPct = (x, d = 2) => !isN(x) ? "–" : (x >= 0 ? "+" : "") + (x * 100).toFixed(d) + "%";
+const fmtPF = x => x === Infinity ? "∞" : isN(x) ? x.toFixed(2) : "–";
 const cls = x => x > 0 ? "up" : x < 0 ? "down" : "";
 const fmtT = ts => new Date(ts).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
-const REASON = { stop_loss: "손절", take_profit: "익절", mid_band: "중심선 복귀", time_exit: "시간 청산", end_of_data: "기간 종료" };
+const REASON = { stop_loss: "손절", trail_stop: "추적손절", take_profit: "익절", signal_exit: "신호 청산", mid_band: "중심선 복귀",
+                 time_exit: "시간 청산", end_of_data: "기간 종료" };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(() => t.classList.remove("on"), 1600); }
+const paramText = (s, p, onlyGrid) => s.params.filter(x => !onlyGrid || x.grid).map(x => `${x.label.replace(/ \(.*\)/, "")} ${p[x.k]}`).join(" · ");
+const paramChips = (s, p) => s.params.map(x => `<span class="kv" title="${esc(x.label)}">${esc(x.label.replace(/ \(.*\)/, ""))} ${p[x.k]}</span>`).join("");
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(() => t.classList.remove("on"), 1800); }
 
 // ---------------- 로그 ----------------
 let logs = store.get("cs_log", []);
@@ -367,10 +296,7 @@ function renderLog() {
 const ENDPOINTS = ["https://data-api.binance.vision", "https://api.binance.com", "https://api1.binance.com",
                    "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com"];
 let ep = store.get("cs_ep", 0) % ENDPOINTS.length;
-function setConn(ok, text) {
-  $("connDot").className = "dot " + (ok ? "ok" : "bad");
-  $("connText").textContent = text;
-}
+function setConn(ok, text) { $("connDot").className = "dot " + (ok ? "ok" : "bad"); $("connText").textContent = text; }
 async function apiGet(path) {
   let lastErr;
   for (let k = 0; k < ENDPOINTS.length; k++) {
@@ -393,13 +319,28 @@ async function apiGet(path) {
   throw new Error("바이낸스 접속 실패 (모든 주소) — 마지막 오류: " + lastErr.message);
 }
 function toCandles(rows) {
-  const c = { ts: [], open: [], high: [], low: [], close: [] };
-  for (const r of rows) { c.ts.push(r[0]); c.open.push(+r[1]); c.high.push(+r[2]); c.low.push(+r[3]); c.close.push(+r[4]); }
+  const c = { ts: [], open: [], high: [], low: [], close: [], volume: [] };
+  for (const r of rows) { c.ts.push(r[0]); c.open.push(+r[1]); c.high.push(+r[2]); c.low.push(+r[3]); c.close.push(+r[4]); c.volume.push(+r[5]); }
   return c;
 }
 const klines = (sym, iv, limit, startTime) =>
   apiGet(`/api/v3/klines?symbol=${sym}&interval=${iv}&limit=${limit}` + (startTime ? `&startTime=${startTime}` : ""));
 const sliceC = (c, a, b) => Object.fromEntries(Object.entries(c).map(([k, v]) => [k, v.slice(a, b)]));
+async function fetchHistory(sym, iv, days, extraBars, onProg) {
+  const tf = TF_MS[iv], now = Date.now();
+  let start = now - days * 864e5 - extraBars * tf;
+  const rows = [];
+  while (start < now) {
+    const batch = await klines(sym, iv, 1000, start);
+    if (!batch.length) break;
+    rows.push(...batch);
+    start = batch[batch.length - 1][0] + tf;
+    onProg && onProg(rows.length);
+    if (batch.length < 1000) break;
+  }
+  if (rows.length && rows[rows.length - 1][0] + tf > now) rows.pop();   // 진행 중 캔들 제외
+  return toCandles(rows);
+}
 
 // ---------------- 실시간 모의매매 ----------------
 let live = store.get("cs_live", null);
@@ -416,18 +357,21 @@ const prices = {}, watch = {};
 let busy = false, lastTick = 0, ticker = null;
 
 async function stepSymbol(sym) {
-  const p = P(), tf = TF_MS[S.interval], w = Core.warmup(p);
-  const all = toCandles(await klines(sym, S.interval, Math.max(+S.candlesLimit, w + 50)));
-  if (all.ts.length < w + 1) { watch[sym] = { err: "데이터 부족" }; return; }
+  const s = strat(), p = params(), tf = TF_MS[S.interval], w = s.warmup(p);
+  const all = toCandles(await klines(sym, S.interval, Math.min(1000, Math.max(500, w + 60))));
+  if (all.ts.length < w + 2) { watch[sym] = { err: `데이터 부족 (${all.ts.length}봉, 필요 ${w + 2})` }; return; }
   const price = all.close[all.close.length - 1];
   prices[sym] = price;
-  const c = sliceC(all, 0, -1), ind = Core.addIndicators(c, p), i = c.ts.length - 1, lastTs = c.ts[i];
-  watch[sym] = { price, rsi: ind.rsi[i], low: ind.low[i], mid: ind.mid[i], ema: ind.ema[i], close: c.close[i], conds: Core.conditions(c, ind, i, p) };
+  const c = sliceC(all, 0, -1), I = Core.makeI(c), d = s.prepare(c, p, I), at = I.atr(14), i = c.ts.length - 1, lastTs = c.ts[i];
+  watch[sym] = { price, ...s.view(c, d, i, p) };
 
   const pos = broker.positions[sym];
   if (pos) {
+    if (!isN(pos.atr)) pos.atr = at[i];                // 이전 버전 포지션 호환
+    if (!isN(pos.highest)) pos.highest = pos.entryPrice;
     const bars = Math.floor((lastTs - pos.entryCandleTs) / tf);
-    const r = Core.exitSignal(pos.entryPrice, bars, price, price, price, ind.mid[i], p);
+    const sig = s.exit ? s.exit(c, d, i, p, pos) : false;
+    const r = Core.checkExit(pos, price, price, price, bars, sig, p);
     if (r) {
       const t = broker.sell(sym, price, r.reason, Date.now());
       lastExit[sym] = lastTs;
@@ -438,12 +382,12 @@ async function stepSymbol(sym) {
   if (lastEval[sym] === lastTs) return;   // 캔들 하나당 진입 판단 1회
   lastEval[sym] = lastTs;
   if (lastExit[sym] != null && (lastTs - lastExit[sym]) / tf < +S.cooldownBars) return;
-  if (!Core.entrySignal(c, ind, i, p)) return;
+  if (!isN(at[i]) || !s.entry(c, d, i, p)) return;
   if (Object.keys(broker.positions).length >= +S.maxPositions) { log(`${sym} 신호 발생 — 최대 보유 종목 수라 건너뜀`); return; }
   const size = Math.min(broker.equity(prices) * +S.positionPct, broker.cash);
   if (size < +S.minOrder) { log(`${sym} 신호 발생 — 현금 부족`); return; }
-  const ps = broker.buy(sym, price, size, lastTs, Date.now());
-  log(`매수 ${sym} @ ${fmtP(ps.entryPrice)} | ${fmtN(size)} USDT (RSI ${ind.rsi[i].toFixed(1)})`, "buy");
+  const ps = broker.buy(sym, price, size, lastTs, Date.now(), { atr: at[i], strategy: s.id });
+  log(`매수 ${sym} @ ${fmtP(ps.entryPrice)} | ${fmtN(size)} USDT · ${s.name} (${watch[sym].info})`, "buy");
 }
 
 async function tick() {
@@ -458,25 +402,26 @@ async function tick() {
     saveLive();
   } finally { busy = false; renderLive(); }
 }
-
 function startTicker() {
   stopTicker();
   const ms = Math.max(5, +S.pollSeconds) * 1000;
   try {   // 워커 타이머는 백그라운드 탭에서도 덜 느려짐
-    const src = `setInterval(() => postMessage(1), ${ms});`;
-    ticker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+    ticker = new Worker(URL.createObjectURL(new Blob([`setInterval(() => postMessage(1), ${ms});`], { type: "text/javascript" })));
     ticker.onmessage = tick;
-  } catch { ticker = { terminate: clearInterval.bind(null, setInterval(tick, ms)) }; }
+  } catch { const h = setInterval(tick, ms); ticker = { terminate: () => clearInterval(h) }; }
 }
 function stopTicker() { if (ticker) { ticker.terminate(); ticker = null; } }
-
 function setRunning(on) {
   running = on; saveLive();
-  if (on) { log(`모의매매 시작: ${symbols().join(", ")} / ${S.interval}`); startTicker(); tick(); }
+  if (on) { log(`모의매매 시작: ${strat().name} · ${S.interval} · ${symbols().join(", ")}`); startTicker(); tick(); }
   else { stopTicker(); log("모의매매 정지"); }
   renderLive();
 }
 
+function renderStratBar() {
+  $("curStrat").textContent = `${strat().name} · ${S.interval}`;
+  $("curParams").innerHTML = `<span class="muted small">${esc(paramText(strat(), params(), true) || "고정 설정")}</span>`;
+}
 function renderLive() {
   const btn = $("runBtn");
   btn.textContent = running ? "■ 정지" : "▶ 시작";
@@ -487,20 +432,17 @@ function renderLive() {
   $("cCash").textContent = fmtN(broker.cash);
   $("cTr").textContent = `${broker.nTrades} / ${broker.nTrades ? Math.round(broker.nWins / broker.nTrades * 100) + "%" : "–"}`;
 
-  const syms = symbols();
-  $("watchTbl").innerHTML = `<tr><th>종목</th><th>현재가</th><th>RSI</th><th>하단밴드까지</th><th>EMA 대비</th><th>조건</th><th>상태</th></tr>` +
-    syms.map(s => {
+  $("watchTbl").innerHTML = `<tr><th>종목</th><th>현재가</th><th>지표</th><th>조건</th><th>상태</th></tr>` +
+    symbols().map(s => {
       const v = watch[s], pos = broker.positions[s];
-      if (!v) return `<tr><td>${s}</td><td colspan="6" class="muted">${running ? "확인 중…" : "시작하면 표시돼요"}</td></tr>`;
-      if (v.err) return `<tr><td>${s}</td><td colspan="6" class="down" style="text-align:left">${esc(v.err)}</td></tr>`;
-      const n = v.conds.filter(Boolean).length;
-      const state = pos
-        ? `<span class="pill hold">보유 ${fmtPct(v.price / pos.entryPrice - 1)}</span>`
-        : n === 3 ? `<span class="pill near">진입 신호</span>` : n === 2 ? `<span class="pill near">근접</span>` : `<span class="pill">대기</span>`;
-      return `<tr><td>${s}</td><td>${fmtP(v.price)}</td><td>${v.rsi.toFixed(1)}</td>
-        <td class="${v.close < v.low ? "up" : ""}">${fmtPct(v.low / v.close - 1)}</td>
-        <td class="${cls(v.close - v.ema)}">${fmtPct(v.close / v.ema - 1)}</td>
-        <td class="conds">${v.conds.map(b => b ? "●" : "○").join("")}</td><td>${state}</td></tr>`;
+      if (!v) return `<tr><td>${s}</td><td colspan="4" class="empty">${running ? "확인 중…" : "시작하면 표시돼요"}</td></tr>`;
+      if (v.err) return `<tr><td>${s}</td><td colspan="4" class="down l">${esc(v.err)}</td></tr>`;
+      const n = v.conds.filter(c => c.ok).length, m = v.conds.length;
+      const state = pos ? `<span class="pill hold">보유 ${fmtPct(v.price / pos.entryPrice - 1)}</span>`
+        : n === m ? `<span class="pill near">진입 신호</span>` : n === m - 1 ? `<span class="pill near">근접</span>` : `<span class="pill">대기</span>`;
+      const title = v.conds.map(c => `${c.ok ? "●" : "○"} ${c.label}`).join("\n");
+      return `<tr><td>${s}</td><td>${fmtP(v.price)}</td><td>${esc(v.info)}</td>
+        <td class="conds" title="${esc(title)}">${v.conds.map(c => c.ok ? "●" : "○").join("")}</td><td>${state}</td></tr>`;
     }).join("");
 
   const tr = broker.trades.slice(-50).reverse();
@@ -508,15 +450,14 @@ function renderLive() {
     ? `<tr><th>종목</th><th>진입</th><th>청산</th><th>진입가</th><th>청산가</th><th>손익</th><th>수익률</th><th>사유</th></tr>` +
       tr.map(t => `<tr><td>${t.symbol}</td><td>${fmtT(t.entryTime)}</td><td>${fmtT(t.exitTime)}</td><td>${fmtP(t.entryPrice)}</td>
         <td>${fmtP(t.exitPrice)}</td><td class="${cls(t.pnl)}">${fmtN(t.pnl)}</td><td class="${cls(t.pnl)}">${fmtPct(t.pnlPct)}</td><td>${REASON[t.reason] || t.reason}</td></tr>`).join("")
-    : `<tr><td class="empty">아직 거래가 없어요. 5분봉 단타라 조건이 맞을 때까지 몇 시간 걸릴 수도 있어요.</td></tr>`;
+    : `<tr><td class="empty">아직 거래가 없어요. 조건이 다 맞을 때까지 몇 시간 걸릴 수도 있어요.</td></tr>`;
+  renderStratBar();
 }
-
 setInterval(() => {
   if (!running) { $("tickInfo").textContent = "정지됨"; return; }
   const ago = lastTick ? Math.round((Date.now() - lastTick) / 1000) : null;
   $("tickInfo").textContent = busy ? "시세 확인 중…" : ago == null ? "시작 중…" : `실행 중 · 마지막 확인 ${ago}초 전 · ${S.pollSeconds}초마다`;
 }, 1000);
-
 $("runBtn").onclick = () => setRunning(!running);
 $("resetBtn").onclick = () => {
   if (!confirm("가상 계좌와 거래 내역을 모두 지우고 처음부터 시작할까요?")) return;
@@ -529,7 +470,7 @@ $("resetBtn").onclick = () => {
 let wake = null;
 async function setWake(on) {
   try {
-    if (on && "wakeLock" in navigator) { wake = await navigator.wakeLock.request("screen"); }
+    if (on && "wakeLock" in navigator) wake = await navigator.wakeLock.request("screen");
     else if (!on && wake) { await wake.release(); wake = null; }
   } catch (e) { log("화면 꺼짐 방지 실패: " + e.message, "err"); $("wakeChk").checked = false; }
   store.set("cs_wake", $("wakeChk").checked);
@@ -541,129 +482,266 @@ document.addEventListener("visibilitychange", () => {
 });
 if ($("wakeChk").checked) setWake(true);
 
-// ---------------- 백테스트 ----------------
-let btResults = [];
-async function fetchHistory(sym, days, onProg) {
-  const tf = TF_MS[S.interval], w = Core.warmup(P()), now = Date.now();
-  let start = now - days * 864e5 - w * tf;
-  const rows = [];
-  while (start < now) {
-    const batch = await klines(sym, S.interval, 1000, start);
-    if (!batch.length) break;
-    rows.push(...batch);
-    start = batch[batch.length - 1][0] + tf;
-    onProg(rows.length);
-    if (batch.length < 1000) break;
-  }
-  if (rows.length && rows[rows.length - 1][0] + tf > now) rows.pop();   // 진행 중 캔들 제외
-  return toCandles(rows);
-}
-async function runBacktest() {
-  const days = Math.max(3, Math.min(365, +$("btDays").value || 30));
-  const btn = $("btBtn"); btn.disabled = true;
-  btResults = [];
-  try {
-    for (const sym of symbols()) {
-      $("btInfo").textContent = `${sym} 과거 시세 받는 중…`;
-      const c = await fetchHistory(sym, days, n => $("btInfo").textContent = `${sym} 과거 시세 받는 중… ${n.toLocaleString()}개`);
-      const r = Core.simulate(c, P(), { symbol: sym, startingCash: +S.startingCash, feeRate: +S.feeRate, slippageBps: +S.slippageBps,
-        positionPct: 1, cooldownBars: +S.cooldownBars, minOrder: +S.minOrder });
-      btResults.push({ sym, c, ...r });
-      renderBt(btResults.length - 1);
-    }
-    const s = btResults.map(r => `${r.sym} ${fmtPct(r.stats.totalReturn)}`).join(" · ");
-    $("btInfo").textContent = `완료 (${days}일, ${S.interval}) — ${s}`;
-    log(`백테스트 ${days}일: ${s}`);
-  } catch (e) {
-    $("btInfo").textContent = "오류: " + e.message; log("백테스트 " + e.message, "err");
-  } finally { btn.disabled = false; }
-}
-function renderBt(sel) {
-  $("btTbl").innerHTML = `<tr><th>종목</th><th>거래</th><th>승률</th><th>전략 수익률</th><th>최대 낙폭</th><th>손익비</th><th>그냥 보유</th><th>청산 사유</th></tr>` +
-    btResults.map((r, k) => {
-      const s = r.stats, rc = {};
-      r.trades.forEach(t => rc[REASON[t.reason]] = (rc[REASON[t.reason]] || 0) + 1);
-      return `<tr class="click ${k === sel ? "sel" : ""}" data-k="${k}"><td>${r.sym}</td><td>${s.trades}</td><td>${(s.winRate * 100).toFixed(0)}%</td>
-        <td class="${cls(s.totalReturn)}">${fmtPct(s.totalReturn)}</td><td class="down">${fmtPct(s.maxDrawdown)}</td>
-        <td>${Number.isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞"}</td><td class="${cls(s.buyHoldReturn)}">${fmtPct(s.buyHoldReturn)}</td>
-        <td class="small muted">${Object.entries(rc).map(([k2, v]) => `${k2} ${v}`).join(", ")}</td></tr>`;
-    }).join("");
-  $("btTbl").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => renderBt(+tr.dataset.k));
-  const r = btResults[sel];
-  $("btChartTitle").textContent = `자산 곡선 — ${r.sym}`;
-  drawChart(r);
-  $("btTrades").innerHTML = r.trades.length
-    ? `<tr><th>진입</th><th>청산</th><th>진입가</th><th>청산가</th><th>수익률</th><th>사유</th></tr>` +
-      r.trades.slice().reverse().map(t => `<tr><td>${fmtT(t.entryTime)}</td><td>${fmtT(t.exitTime)}</td><td>${fmtP(t.entryPrice)}</td>
-        <td>${fmtP(t.exitPrice)}</td><td class="${cls(t.pnl)}">${fmtPct(t.pnlPct)}</td><td>${REASON[t.reason]}</td></tr>`).join("")
-    : `<tr><td class="empty">이 기간엔 진입 조건이 한 번도 안 맞았어요.</td></tr>`;
-}
-function drawChart(r) {
-  const cv = $("btCanvas"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+// ---------------- 차트 ----------------
+function drawChart(cv, r, cash) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
   cv.width = W * dpr; cv.height = H * dpr;
   const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
-  const css = getComputedStyle(document.documentElement);
-  const eq = r.equity.map(v => v / +S.startingCash - 1);
-  const bh = r.equity.map((_, k) => r.c.close[r.start + k] / r.c.close[r.start] - 1);
+  const css = getComputedStyle(document.documentElement), col = v => css.getPropertyValue(v);
+  const step = Math.max(1, Math.floor(r.equity.length / 1500));                  // 점이 너무 많으면 솎아내기
+  const idx = []; for (let k = 0; k < r.equity.length; k += step) idx.push(k); if (idx[idx.length - 1] !== r.equity.length - 1) idx.push(r.equity.length - 1);
+  const eq = idx.map(k => r.equity[k] / cash - 1), bh = idx.map(k => r.c.close[r.start + k] / r.c.close[r.start] - 1);
   const lo = Math.min(...eq, ...bh, 0), hi = Math.max(...eq, ...bh, 0), pad = (hi - lo) * 0.08 || 0.01;
-  const L = 52, R = 10, T = 12, B = 22;
+  const L = 56, R = 10, T = 12, B = 22;
   const x = k => L + (W - L - R) * k / Math.max(1, eq.length - 1), y = v => T + (H - T - B) * (1 - (v - lo + pad) / (hi - lo + 2 * pad));
-  g.font = "11px IBM Plex Mono, monospace"; g.fillStyle = css.getPropertyValue("--muted"); g.strokeStyle = css.getPropertyValue("--line");
+  g.font = "11px IBM Plex Mono, monospace"; g.fillStyle = col("--muted"); g.strokeStyle = col("--line");
   for (let k = 0; k <= 4; k++) {
     const v = lo - pad + (hi - lo + 2 * pad) * k / 4;
     g.beginPath(); g.moveTo(L, y(v)); g.lineTo(W - R, y(v)); g.stroke();
     g.fillText(fmtPct(v, 1), 4, y(v) + 4);
   }
   const line = (arr, color, wdt) => { g.beginPath(); arr.forEach((v, k) => k ? g.lineTo(x(k), y(v)) : g.moveTo(x(k), y(v))); g.strokeStyle = color; g.lineWidth = wdt; g.stroke(); g.lineWidth = 1; };
-  line(bh, css.getPropertyValue("--muted"), 1.2);
-  line(eq, css.getPropertyValue("--accent"), 2);
-  g.fillStyle = css.getPropertyValue("--muted");
+  line(bh, col("--muted"), 1.2);
+  line(eq, col("--accent"), 2);
+  g.fillStyle = col("--muted");
   g.fillText(fmtT(r.c.ts[r.start]), L, H - 6);
-  const endTxt = fmtT(r.c.ts[r.c.ts.length - 1]); g.fillText(endTxt, W - R - g.measureText(endTxt).width, H - 6);
+  const endTxt = fmtT(r.c.ts[r.start + r.equity.length - 1]); g.fillText(endTxt, W - R - g.measureText(endTxt).width, H - 6);
+}
+
+// ---------------- 백테스트 (현재 전략) ----------------
+let btResults = [], btSel = 0;
+async function runBacktest() {
+  const days = Math.max(3, Math.min(365, +$("btDays").value || 30));
+  const s = strat(), p = params(), btn = $("btBtn"); btn.disabled = true;
+  btResults = [];
+  try {
+    for (const sym of symbols()) {
+      $("btInfo").textContent = `${sym} 과거 시세 받는 중…`;
+      const c = await fetchHistory(sym, S.interval, days, s.warmup(p) + 5, n => $("btInfo").textContent = `${sym} 과거 시세 받는 중… ${n.toLocaleString()}봉`);
+      const r = Core.simulate(c, s, p, { ...brokerOpts(), symbol: sym, positionPct: 1 });
+      btResults.push({ sym, c, ...r });
+      renderBt(btResults.length - 1);
+      await sleep0();
+    }
+    const sum = btResults.map(r => `${r.sym} ${fmtPct(r.stats.totalReturn)}`).join(" · ");
+    $("btInfo").textContent = `완료 — ${s.name} · ${S.interval} · ${days}일 — ${sum}`;
+    log(`백테스트 ${s.name} ${S.interval} ${days}일: ${sum}`);
+  } catch (e) {
+    $("btInfo").textContent = "오류: " + e.message; log("백테스트 " + e.message, "err");
+  } finally { btn.disabled = false; }
+}
+function reasonCounts(trades) {
+  const rc = {}; trades.forEach(t => rc[REASON[t.reason] || t.reason] = (rc[REASON[t.reason] || t.reason] || 0) + 1);
+  return Object.entries(rc).map(([k, v]) => `${k} ${v}`).join(", ");
+}
+function renderBt(sel) {
+  btSel = sel;
+  $("btTbl").innerHTML = `<tr><th>종목</th><th>거래</th><th>승률</th><th>전략 수익률</th><th>최대 낙폭</th><th>손익비</th><th>그냥 보유</th><th>청산 사유</th></tr>` +
+    btResults.map((r, k) => { const s = r.stats;
+      return `<tr class="click ${k === sel ? "sel" : ""}" data-k="${k}"><td>${r.sym}</td><td>${s.trades}</td><td>${(s.winRate * 100).toFixed(0)}%</td>
+        <td class="${cls(s.totalReturn)}">${fmtPct(s.totalReturn)}</td><td class="down">${fmtPct(s.maxDrawdown)}</td>
+        <td>${fmtPF(s.profitFactor)}</td><td class="${cls(s.buyHoldReturn)}">${fmtPct(s.buyHoldReturn)}</td>
+        <td class="small muted">${reasonCounts(r.trades)}</td></tr>`; }).join("");
+  $("btTbl").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => renderBt(+tr.dataset.k));
+  const r = btResults[sel];
+  $("btChartTitle").textContent = `자산 곡선 — ${r.sym}`;
+  drawChart($("btCanvas"), r, +S.startingCash);
+  $("btTrades").innerHTML = r.trades.length
+    ? `<tr><th>진입</th><th>청산</th><th>진입가</th><th>청산가</th><th>수익률</th><th>사유</th></tr>` +
+      r.trades.slice().reverse().map(t => `<tr><td>${fmtT(t.entryTime)}</td><td>${fmtT(t.exitTime)}</td><td>${fmtP(t.entryPrice)}</td>
+        <td>${fmtP(t.exitPrice)}</td><td class="${cls(t.pnl)}">${fmtPct(t.pnlPct)}</td><td>${REASON[t.reason] || t.reason}</td></tr>`).join("")
+    : `<tr><td class="empty">이 기간엔 진입 조건이 한 번도 안 맞았어요.</td></tr>`;
 }
 $("btBtn").onclick = runBacktest;
-window.addEventListener("resize", () => { const s = document.querySelector("#btTbl tr.sel"); if (s) drawChart(btResults[+s.dataset.k]); });
+
+// ---------------- 전략 연구실 ----------------
+let labRows = [], labSel = 0, labSymSel = 0, labRunning = false;
+const dataCache = {};
+function renderLabControls() {
+  const tfs = store.get("cs_lab_tfs", ["5m", "15m"]), sel = store.get("cs_lab_strats", Core.STRATEGIES.map(s => s.id));
+  $("labTfs").innerHTML = TFS.map(t => `<label class="chip"><input type="checkbox" value="${t}" ${tfs.includes(t) ? "checked" : ""}>${t}</label>`).join("");
+  $("labStrats").innerHTML = Core.STRATEGIES.map(s => `<label class="chip" title="${esc(s.desc)}"><input type="checkbox" value="${s.id}" ${sel.includes(s.id) ? "checked" : ""}>${s.name} <span class="muted small">${Core.grid(s).length}</span></label>`).join("");
+}
+const checked = id => [...$(id).querySelectorAll("input:checked")].map(i => i.value);
+function verdict(r) {
+  if (r.test.trades < 5) return `<span class="pill">거래 적음</span>`;
+  if (r.train.avg > 0 && r.test.avg > 0) return `<span class="pill pass">✅ 통과</span>`;
+  if (r.test.avg > 0) return `<span class="pill warn">⚠️ 검증만 +</span>`;
+  return `<span class="pill fail">❌</span>`;
+}
+async function runLab() {
+  if (labRunning) return;
+  const days = Math.max(14, Math.min(365, +$("labDays").value || 90)), tfs = checked("labTfs"), ids = checked("labStrats"), syms = symbols();
+  if (!tfs.length || !ids.length) { toast("봉과 전략을 하나 이상 골라주세요"); return; }
+  store.set("cs_lab_tfs", tfs); store.set("cs_lab_strats", ids);
+  const strats = ids.map(Core.byId), btn = $("labBtn"), prog = $("labProg"), bar = prog.firstElementChild;
+  const setProg = f => { bar.style.width = (f * 100).toFixed(1) + "%"; };
+  labRunning = true; btn.disabled = true; prog.style.display = "block"; setProg(0);
+  labRows = [];
+  try {
+    // 1) 5분봉 데이터 받기 (워밍업용 여유 기간 포함) → 15m·1h는 합쳐서 만듦
+    const extraDays = tfs.includes("1h") ? 25 : tfs.includes("15m") ? 9 : 3;
+    const raw = {};
+    for (const sym of syms) {
+      const key = `${sym}|${days}|${extraDays}`;
+      if (!dataCache[key] || Date.now() - dataCache[key].at > 30 * 60e3) {
+        const c = await fetchHistory(sym, "5m", days + extraDays, 0, n => $("labInfo").textContent = `${sym} 5분봉 받는 중… ${n.toLocaleString()}봉`);
+        dataCache[key] = { c, at: Date.now() };
+      }
+      raw[sym] = dataCache[key].c;
+    }
+    // 2) 데이터셋 준비: 학습/검증 경계
+    const sets = {};
+    for (const tf of tfs) for (const sym of syms) {
+      const c = Core.resample(raw[sym], TF_MS["5m"], TF_MS[tf]);
+      const begin = Date.now() - days * 864e5, from0 = Math.max(0, c.ts.findIndex(t => t >= begin));
+      sets[tf + sym] = { c, I: Core.makeI(c), from0, split: from0 + Math.floor((c.ts.length - from0) * 0.7) };
+    }
+    const total = tfs.length * strats.reduce((n, s) => n + Core.grid(s).length, 0) * syms.length;
+    let done = 0;
+    const opt = { ...brokerOpts(), positionPct: 1 };
+    // 3) 전략 × 봉: 학습 구간에서 최적 조합 → 검증 구간 평가
+    for (const tf of tfs) for (const s of strats) {
+      $("labInfo").textContent = `${s.name} · ${tf} 계산 중…`;
+      let best = null;
+      const minTrades = Math.max(5, syms.length * 3);
+      for (const p of Core.grid(s)) {
+        const res = syms.map(sym => { const d = sets[tf + sym]; return Core.simulate(d.c, s, p, { ...opt, I: d.I, symbol: sym, from: d.from0, to: d.split }).stats; });
+        const avg = res.reduce((a, r) => a + r.totalReturn, 0) / res.length, trades = res.reduce((a, r) => a + r.trades, 0);
+        const score = trades >= minTrades ? avg : avg - 1;       // 거래가 너무 적은 조합은 후순위
+        if (!best || score > best.score) best = { p, score, avg, trades, per: res };
+        done += syms.length;
+        if (done % 24 < syms.length) { setProg(done / total); await sleep0(); }
+      }
+      const per = syms.map(sym => { const d = sets[tf + sym]; return { sym, c: d.c, ...Core.simulate(d.c, s, best.p, { ...opt, I: d.I, symbol: sym, from: d.split }) }; });
+      const st = per.map(r => r.stats), trades = st.reduce((a, r) => a + r.trades, 0), wins = st.reduce((a, r) => a + r.wins, 0), losses = st.reduce((a, r) => a + r.losses, 0);
+      labRows.push({
+        s, tf, p: best.p,
+        train: { avg: best.avg, trades: best.trades, per: best.per },
+        test: { avg: st.reduce((a, r) => a + r.totalReturn, 0) / st.length, trades,
+          winRate: trades ? per.reduce((a, r) => a + r.trades.filter(t => t.pnl > 0).length, 0) / trades : 0,
+          mdd: Math.min(...st.map(r => r.maxDrawdown)), pf: losses > 0 ? wins / losses : wins > 0 ? Infinity : 0,
+          bh: st.reduce((a, r) => a + r.buyHoldReturn, 0) / st.length, per },
+      });
+      labRows.sort((a, b) => (a.test.trades < 5) - (b.test.trades < 5) || b.test.avg - a.test.avg);   // 거래 적은 건 뒤로
+      renderLab(0);
+      await sleep0();
+    }
+    setProg(1);
+    const top = labRows[0], passed = labRows.filter(r => r.train.avg > 0 && r.test.avg > 0 && r.test.trades >= 5).length;
+    const first = raw[syms[0]], spanTxt = `${fmtT(first.ts[0])} ~ ${fmtT(first.ts[first.ts.length - 1])}`;
+    $("labInfo").textContent = `완료 — ${labRows.length}개 비교 · 통과 ${passed}개 · 1위 ${top.s.name} ${top.tf} (검증 ${fmtPct(top.test.avg)})`;
+    log(`연구실 ${days}일 (${spanTxt}): 1위 ${top.s.name} ${top.tf} 검증 ${fmtPct(top.test.avg)} · 통과 ${passed}/${labRows.length}`);
+  } catch (e) {
+    $("labInfo").textContent = "오류: " + e.message; log("연구실 " + e.message, "err");
+  } finally { labRunning = false; btn.disabled = false; setTimeout(() => prog.style.display = "none", 800); }
+}
+function renderLab(sel) {
+  labSel = sel;
+  $("labTbl").innerHTML = `<tr><th>#</th><th class="l">전략</th><th>봉</th><th>학습</th><th>검증</th><th>검증 거래</th><th>승률</th><th>최대 낙폭</th><th>손익비</th><th>그냥 보유</th><th>판정</th></tr>` +
+    labRows.map((r, k) => `<tr class="click ${k === sel ? "sel" : ""}" data-k="${k}"><td>${k + 1}</td><td class="l name">${r.s.name}</td><td>${r.tf}</td>
+      <td class="${cls(r.train.avg)}">${fmtPct(r.train.avg)}</td><td class="${cls(r.test.avg)}"><b>${fmtPct(r.test.avg)}</b></td>
+      <td>${r.test.trades}</td><td>${(r.test.winRate * 100).toFixed(0)}%</td><td class="down">${fmtPct(r.test.mdd)}</td>
+      <td>${fmtPF(r.test.pf)}</td><td class="${cls(r.test.bh)}">${fmtPct(r.test.bh)}</td><td>${verdict(r)}</td></tr>`).join("");
+  $("labTbl").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { labSymSel = 0; renderLab(+tr.dataset.k); });
+  renderLabDetail();
+}
+function renderLabDetail() {
+  const r = labRows[labSel];
+  if (!r) { $("labDetail").style.display = "none"; return; }
+  $("labDetail").style.display = "block";
+  $("ldTitle").textContent = `${r.s.name} · ${r.tf}`;
+  $("ldDesc").textContent = r.s.desc;
+  $("ldParams").innerHTML = `<span class="muted small">학습 구간에서 고른 설정: </span>` + paramChips(r.s, r.p);
+  $("ldTbl").innerHTML = `<tr><th>종목</th><th>학습 수익률</th><th>학습 거래</th><th>검증 수익률</th><th>검증 거래</th><th>승률</th><th>최대 낙폭</th><th>그냥 보유</th><th class="l">검증 청산 사유</th></tr>` +
+    r.test.per.map((t, k) => { const tr = r.train.per[k];
+      return `<tr class="click ${k === labSymSel ? "sel" : ""}" data-k="${k}"><td>${t.sym}</td><td class="${cls(tr.totalReturn)}">${fmtPct(tr.totalReturn)}</td><td>${tr.trades}</td>
+        <td class="${cls(t.stats.totalReturn)}">${fmtPct(t.stats.totalReturn)}</td><td>${t.stats.trades}</td><td>${(t.stats.winRate * 100).toFixed(0)}%</td>
+        <td class="down">${fmtPct(t.stats.maxDrawdown)}</td><td class="${cls(t.stats.buyHoldReturn)}">${fmtPct(t.stats.buyHoldReturn)}</td>
+        <td class="l small muted">${reasonCounts(t.trades)}</td></tr>`; }).join("");
+  $("ldTbl").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { labSymSel = +tr.dataset.k; renderLabDetail(); });
+  $("ldSym").textContent = `· ${r.test.per[labSymSel].sym}`;
+  drawChart($("ldCanvas"), r.test.per[labSymSel], +S.startingCash);
+}
+$("labBtn").onclick = runLab;
+$("applyBtn").onclick = () => {
+  const r = labRows[labSel]; if (!r) return;
+  const n = Object.keys(broker.positions).length;
+  if (!confirm(`실시간 모의매매를 '${r.s.name} · ${r.tf}'로 바꿀까요?` + (n ? `\n보유 중인 ${n}종목은 새 전략의 청산 규칙으로 관리돼요.` : ""))) return;
+  S.strategyId = r.s.id; S.interval = r.tf; S.params = { ...r.p };
+  store.set("cs_settings", S); lastEval = {}; saveLive();
+  if (running) startTicker();
+  log(`전략 변경 → ${r.s.name} · ${r.tf} (${paramText(r.s, r.p, true)})`);
+  renderSettings(); renderLive(); toast("적용했어요");
+};
 
 // ---------------- 설정 화면 ----------------
+let formStratId = S.strategyId;
 function renderSettings() {
-  $("setForm").innerHTML = FIELDS.map(([k, label, type, hint, wide]) => {
-    const v = S[k];
-    const input = Array.isArray(type)
-      ? `<select id="f_${k}">${type.map(o => `<option ${String(v) === o ? "selected" : ""}>${o}</option>`).join("")}</select>`
-      : `<input id="f_${k}" type="${type}" step="any" value="${esc(v)}">`;
-    return `<label class="${wide || ""}">${label}${input}${hint ? `<span class="hint">${hint}</span>` : ""}</label>`;
-  }).join("");
+  formStratId = S.strategyId;
+  $("setForm").innerHTML = GEN_FIELDS.map(([k, label, type, hint, wide]) =>
+    `<label class="${wide || ""}">${label}<input id="f_${k}" type="${type}" step="any" value="${esc(S[k])}">${hint ? `<span class="hint">${hint}</span>` : ""}</label>`).join("");
+  renderStratForm(params());
+}
+function renderStratForm(p) {
+  const s = Core.byId(formStratId);
+  $("stratForm").innerHTML = `<h3>전략</h3>
+    <label>전략 선택<select id="f_strategyId">${Core.STRATEGIES.map(x => `<option value="${x.id}" ${x.id === s.id ? "selected" : ""}>${x.name}</option>`).join("")}</select></label>
+    <label>캔들 간격<select id="f_interval">${TFS.map(t => `<option ${t === S.interval ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+    <div class="wide note">${esc(s.desc)}</div>` +
+    s.params.map(x => `<label>${x.label}<input id="p_${x.k}" type="number" step="any" value="${esc(p[x.k])}">${x.grid ? `<span class="hint">연구실 비교값: ${x.grid.join(", ")}</span>` : ""}</label>`).join("");
+  $("f_strategyId").onchange = e => { formStratId = e.target.value; renderStratForm(Core.defaults(Core.byId(formStratId))); };
 }
 $("saveBtn").onclick = () => {
   const next = { ...S };
-  for (const [k, , type] of FIELDS) {
+  for (const [k, , type] of GEN_FIELDS) {
     const raw = $("f_" + k).value;
     next[k] = type === "number" ? Number(raw) : raw;
     if (type === "number" && !Number.isFinite(next[k])) { toast(`'${k}' 값이 숫자가 아니에요`); return; }
   }
+  const s = Core.byId($("f_strategyId").value), p = {};
+  for (const x of s.params) { p[x.k] = Number($("p_" + x.k).value); if (!Number.isFinite(p[x.k])) { toast(`'${x.label}' 값이 숫자가 아니에요`); return; } }
+  const changed = next.strategyId !== s.id || next.interval !== $("f_interval").value;
+  next.strategyId = s.id; next.interval = $("f_interval").value; next.params = p;
   S = next; store.set("cs_settings", S);
   broker.feeRate = +S.feeRate; broker.slip = +S.slippageBps / 10000;
+  if (changed) { lastEval = {}; saveLive(); }
   if (running) startTicker();
-  log("설정 저장"); toast("저장했어요"); renderLive();
+  log(`설정 저장 — ${s.name} · ${S.interval}`); toast("저장했어요"); renderLive();
 };
-$("defBtn").onclick = () => { S = { ...DEFAULTS }; renderSettings(); toast("기본값을 불러왔어요. 저장을 눌러야 적용돼요"); };
+$("defBtn").onclick = () => {
+  for (const [k] of GEN_FIELDS) $("f_" + k).value = GENERAL[k];
+  formStratId = "v1"; $("f_interval").value = "5m"; renderStratForm(Core.defaults(Core.byId("v1")));
+  toast("기본값을 불러왔어요. 저장을 눌러야 적용돼요");
+};
 
 // ---------------- 탭 / 상황 복사 ----------------
-document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
-  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
-  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.id === "tab-" + b.dataset.tab));
-  if (b.dataset.tab === "bt") { const s = document.querySelector("#btTbl tr.sel"); if (s) drawChart(btResults[+s.dataset.k]); }
+function showTab(name) {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x.dataset.tab === name));
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.id === "tab-" + name));
+  if (name === "bt" && btResults.length) renderBt(btSel);
+  if (name === "lab") renderLabDetail();
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+document.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => showTab(b.dataset.goto));
+window.addEventListener("resize", () => {
+  if ($("tab-bt").classList.contains("on") && btResults.length) drawChart($("btCanvas"), btResults[btSel], +S.startingCash);
+  if ($("tab-lab").classList.contains("on")) renderLabDetail();
 });
 $("copyBtn").onclick = async () => {
   const eq = broker.equity(prices);
   const lines = [
     `[Coin Scalper ${$("ver").textContent}] ${new Date().toLocaleString("ko-KR")}`,
-    `접속: ${$("connText").textContent} | ${running ? "실행 중" : "정지"} | 브라우저: ${navigator.userAgent.match(/(Chrome|Firefox|Safari|Edg)\/[\d.]+/)?.[0] || "?"}`,
+    `접속: ${$("connText").textContent} | ${running ? "실행 중" : "정지"} | 브라우저: ${navigator.userAgent.match(/(Edg|Chrome|Firefox|Safari)\/[\d.]+/)?.[0] || "?"}`,
+    `전략: ${strat().name} · ${S.interval} · ${paramText(strat(), params(), false)}`,
     `자산 ${fmtN(eq)} (${fmtPct(eq / broker.startingCash - 1)}) | 현금 ${fmtN(broker.cash)} | 거래 ${broker.nTrades}회 승 ${broker.nWins}`,
     `보유: ${Object.entries(broker.positions).map(([s, p]) => `${s} ${fmtPct((prices[s] ?? p.entryPrice) / p.entryPrice - 1)}`).join(", ") || "없음"}`,
     btResults.length ? `백테스트: ${btResults.map(r => `${r.sym} ${fmtPct(r.stats.totalReturn)} (${r.stats.trades}회, 승률 ${(r.stats.winRate * 100).toFixed(0)}%, 보유 ${fmtPct(r.stats.buyHoldReturn)})`).join(" / ")}` : "",
-    `설정: ${JSON.stringify(S)}`,
-    "최근 로그:", ...logs.slice(-15).map(l => `  ${fmtT(l.t)} ${l.msg}`),
+    labRows.length ? `연구실 (${$("labDays").value}일, 학습70/검증30, ${symbols().join("/")}):\n` + labRows.slice(0, 10).map((r, k) =>
+      `  #${k + 1} ${r.s.name} ${r.tf} | 검증 ${fmtPct(r.test.avg)} ${r.test.trades}회 승률 ${(r.test.winRate * 100).toFixed(0)}% MDD ${fmtPct(r.test.mdd)} PF ${fmtPF(r.test.pf)} | 학습 ${fmtPct(r.train.avg)} ${r.train.trades}회 | 보유 ${fmtPct(r.test.bh)} | ${paramText(r.s, r.p, true)}`).join("\n") : "",
+    `일반 설정: 종목 ${S.symbols} · 비중 ${S.positionPct} · 최대 ${S.maxPositions}종목 · 수수료 ${S.feeRate} · 슬리피지 ${S.slippageBps}bp`,
+    "최근 로그:", ...logs.slice(-12).map(l => `  ${fmtT(l.t)} ${l.msg}`),
   ].filter(Boolean).join("\n");
   try { await navigator.clipboard.writeText(lines); }
   catch { const ta = document.createElement("textarea"); ta.value = lines; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
@@ -672,7 +750,7 @@ $("copyBtn").onclick = async () => {
 
 // ---------------- 시작 ----------------
 $("ver").textContent = BUILD.startsWith("__") ? "로컬 파일" : BUILD;
-renderSettings(); renderLog(); renderLive();
+renderSettings(); renderLabControls(); renderLog(); renderLive();
 if (running) { log("페이지 다시 열림 — 모의매매 이어서 진행"); startTicker(); tick(); }
 })();
 </script>

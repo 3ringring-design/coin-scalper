@@ -33,7 +33,7 @@ jobs:
           node tests/web_core.test.js 2>&1 | tee ci/build.log
 
       - name: Stamp version
-        run: sed -i "s/__BUILD__/${GITHUB_SHA::7} · $(TZ=Asia/Seoul date '+%m-%d %H:%M')/" web/index.html
+        run: sed -i -e "s/__BUILD__/${GITHUB_SHA::7} · $(TZ=Asia/Seoul date '+%m-%d %H:%M')/" -e "s/__SHA__/${GITHUB_SHA::7}/" web/index.html
 
       - uses: actions/configure-pages@v5
 
