@@ -204,6 +204,19 @@ canvas { display: block; width: 100%; height: 240px; }
         </div>
       </div>
     </div>
+    <div class="panel">
+      <h2>🎲 지금 세팅 견고성 테스트 <span class="muted small">실행 중인 포트폴리오를 실제 계좌 그대로 (한 계좌 · 같은 위험% · 자동 레버리지) 여러 해에 돌려봐요</span></h2>
+      <div class="pad">
+        <div class="row">
+          <label class="muted small">기간</label><input type="number" id="stDays" value="1460" min="200" max="2190" style="width:80px"><span class="muted small">일</span>
+          <label class="muted small" style="margin-left:8px">추가로 시험할 코인</label><input id="stExtra" placeholder="예: XRPUSDT, LINKUSDT" style="width:220px">
+          <button class="btn primary" id="stBtn">테스트 시작</button>
+          <span class="muted small" id="stInfo">설정은 최근 1년으로 골랐기 때문에, 그 이전 기간 성적이 진짜 검증이에요.</span>
+        </div>
+        <div id="stOut"></div>
+        <canvas id="stCanvas" style="display:none"></canvas>
+      </div>
+    </div>
     <div class="progress" id="labProg"><div></div></div>
     <div class="panel">
       <h2>순위 <span class="muted small" id="labHead">통과(구간 60%↑ · 수익÷낙폭 0.2↑ · 거래 20↑) → 수익÷낙폭 순 · 종목 평균 · 행을 누르면 상세 · ☐로 조합에 담기</span></h2>
@@ -1102,6 +1115,79 @@ $("comboApply").onclick = () => {
   applyPortfolio(slots, m, `연구실 조합 ${rows.length}개`);
 };
 $("labBtn").onclick = runLab;
+
+// ---------- 견고성 테스트: 지금 포트폴리오를 실제 계좌 그대로 여러 해 · 무작위 기간 · 위험% · 코인별로 ----------
+let stressText = "";
+async function runStress() {
+  const btn = $("stBtn"); if (btn.disabled) return;
+  const days = Math.max(200, Math.min(2190, +$("stDays").value || 1460));
+  const base = symbols(), extra = $("stExtra").value.split(/[\s,]+/).map(s => s.toUpperCase()).filter(s => s && !base.includes(s));
+  const slots = liveSlots(), tf = slots[0].interval;
+  if (slots.some(sl => sl.interval !== tf)) { toast("봉 간격이 같은 전략끼리만 테스트할 수 있어요"); return; }
+  btn.disabled = true; const info = $("stInfo");
+  try {
+    const data = {};
+    for (const sym of [...base, ...extra]) {
+      try {
+        const c = await fetchHistory(sym, tf, days, 0, n => info.textContent = `${sym} 받는 중… ${n.toLocaleString()}봉`);
+        if (c.ts.length > 500) { const cm = Core.mirror(c); data[sym] = { sym, c, I: Core.makeI(c), cm, Im: Core.makeI(cm) }; }
+      } catch (e) { log(`견고성 테스트: ${sym} 데이터 실패 (${e.message})`, "err"); }
+    }
+    if (!base.every(s => data[s])) throw new Error("기본 종목 데이터를 못 받았어요");
+    info.textContent = "계산 중…"; await sleep0();
+    const tot = slots.reduce((a, sl) => a + (+sl.weight || 0), 0) || 1;
+    const mkSlots = only => { const use = only ? slots.filter(sl => sl.id === only) : slots, t = only ? (+use[0].weight || 1) : tot;
+      return use.map(sl => ({ name: sl.name, s: slotStrat(sl), p: slotParams(sl), dir: slotDir(sl), share: (+sl.weight || 0) / t })); };
+    const bo = { ...brokerOpts(), positionPct: +S.positionPct };
+    const run = (syms, o = {}, only) => {
+      const ord = syms.includes(base[0]) ? [base[0], ...syms.filter(s => s !== base[0])] : syms, sl = mkSlots(only);
+      return Core.simulatePortfolio(ord.map(s => data[s]), sl, { ...bo, maxPositions: Math.max(+S.maxPositions, sl.length * syms.length), ...o });
+    };
+    const yearAgo = Date.now() - 365 * DAY;
+    const sum = r => { const k = r.ts.findIndex(t => t >= yearAgo), all = Core.spanStats(r.equity, r.ts);
+      return { all, before: k > 24 * 60 ? Core.spanStats(r.equity, r.ts, 0, k + 1) : null, recent: Core.spanStats(r.equity, r.ts, Math.max(0, k)),
+               w90: Core.randomWindows(r.equity, r.ts, 90, 400, 7), ratio: all.mdd < 0 ? all.cagr / -all.mdd : Infinity, n: r.trades.length, liq: r.stats.liquidations }; };
+    const main = run(base), M = sum(main);
+    const master = data[base[0]].c;
+    const yrs = Core.yearly(main.equity, main.ts);
+    const wins = [30, 90, 180, 365].map(d => Core.randomWindows(main.equity, main.ts, d, 400, 11)).filter(Boolean);
+    await sleep0();
+    const risks = [0.005, 0.01, 0.02, 0.03, 0.04].map(r => ({ r, x: sum(run(base, { sizing: "risk", riskPct: r, maxLev: Math.max(bo.maxLev, r > 0.03 ? 5 : 3) })) }));
+    await sleep0();
+    const alone = slots.length > 1 ? slots.map(sl => ({ name: sl.name, x: sum(run(base, {}, sl.id)) })) : [];
+    const coins = Object.keys(data).map(s => ({ s, seen: base.includes(s), x: sum(run([s])) }));
+    const cur = +S.riskPct;
+    const T = (head, rows) => `<div class="scroll" style="margin-top:10px"><table style="width:auto;min-width:60%"><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr>${rows.join("")}</table></div>`;
+    const td = (v, d = 1) => `<td class="${cls(v)}">${fmtPct(v, d)}</td>`;
+    const rowOf = (label, x, hl) => `<tr${hl ? ' class="sel"' : ""}><td class="l">${label}</td>${td(x.all.cagr)}<td class="down">${fmtPct(x.all.mdd, 1)}</td><td>${isN(x.ratio) ? x.ratio.toFixed(2) : "∞"}</td>${x.before ? td(x.before.cagr) : "<td>–</td>"}${td(x.recent.ret)}<td>${x.w90 ? Math.round(x.w90.pos * 100) + "%" : "–"}</td>${x.w90 ? td(x.w90.p10) + td(x.w90.worst) : "<td>–</td><td>–</td>"}<td>${x.n}${x.liq ? ` 💥${x.liq}` : ""}</td></tr>`;
+    const H = ["", "연 수익 (환산)", "최대 낙폭", "연수익÷낙폭", "처음 보는 기간 (1년 이전) 연", "최근 1년", "90일 무작위 +확률", "90일 하위 10%", "90일 최악", "거래"];
+    $("stOut").innerHTML =
+      `<div class="note" style="margin-top:10px">${fmtT(master.ts[0])} ~ ${fmtT(master.ts[master.ts.length - 1])} · ${base.join("/")} · ${marketText()} · 위험 ${(cur * 100).toFixed(1)}%${bo.autoLev ? ` · 자동 레버리지 ≤${bo.maxLev}배` : ""} · BTC 그냥 보유 ${fmtPct(master.close[master.close.length - 1] / master.close[0] - 1, 1)}<br>
+        설정을 <b>최근 1년</b> 데이터로 골랐기 때문에 <b>"처음 보는 기간"</b> 칸이 진짜 실력이에요. 여기서도 +면 우연일 가능성이 낮아요.</div>` +
+      T(H, [rowOf("지금 세팅", M, true)]) +
+      T(["연도", "수익률", "최대 낙폭"], yrs.map(y => `<tr><td>${y.year}</td>${td(y.ret)}<td class="down">${fmtPct(y.mdd, 1)}</td></tr>`)) +
+      T(["무작위 기간 (×400번)", "+일 확률", "중간값", "하위 10%", "최악", "최고", "낙폭 (중간 / 최악)"], wins.map(w => `<tr><td>${w.days}일</td><td>${Math.round(w.pos * 100)}%</td>${td(w.median)}${td(w.p10)}${td(w.worst)}${td(w.best)}<td class="down">${fmtPct(w.mddMedian, 1)} / ${fmtPct(w.mddWorst, 1)}</td></tr>`)) +
+      `<h3 class="small" style="margin:14px 0 0">거래당 위험 % — 원금 손실을 더 감수하면 수익이 얼마나 늘까</h3>` +
+      T(H, risks.map(({ r, x }) => rowOf(`위험 ${r * 100}%${Math.abs(r - cur) < 1e-9 ? " (지금)" : ""}`, x, Math.abs(r - cur) < 1e-9))) +
+      (alone.length ? `<h3 class="small" style="margin:14px 0 0">전략 하나만 vs 묶음</h3>` + T(H, [...alone.map(a => rowOf(a.name + "만", a.x)), rowOf("묶음", M, true)]) : "") +
+      `<h3 class="small" style="margin:14px 0 0">코인별 (각각 따로 · ${extra.length ? "추가 코인은 설정을 고를 때 안 쓴 코인" : "추가 코인을 넣으면 처음 보는 코인에서도 시험해요"})</h3>` +
+      T(H, coins.map(c => rowOf(c.s + (c.seen ? "" : " 🆕"), c.x)));
+    const cv = $("stCanvas"); cv.style.display = "block";
+    drawChart(cv, { c: master, start: master.ts.indexOf(main.ts[0]), equity: main.equity }, bo.startingCash);
+    const ln = (l, x) => `${l}: 연 ${fmtPct(x.all.cagr, 1)} 낙폭 ${fmtPct(x.all.mdd, 1)} 비율 ${isN(x.ratio) ? x.ratio.toFixed(2) : "∞"} | 처음보는기간 연 ${x.before ? fmtPct(x.before.cagr, 1) : "-"} · 최근1년 ${fmtPct(x.recent.ret, 1)} | 90일 +${x.w90 ? Math.round(x.w90.pos * 100) : "-"}% 하위10% ${x.w90 ? fmtPct(x.w90.p10, 1) : "-"} 최악 ${x.w90 ? fmtPct(x.w90.worst, 1) : "-"} | ${x.n}회${x.liq ? ` 청산${x.liq}` : ""}`;
+    stressText = [`견고성 테스트 (${fmtT(master.ts[0]).slice(0, 10)}~, ${base.join("/")}, 위험 ${(cur * 100).toFixed(1)}%):`,
+      "  " + ln("지금 세팅", M),
+      "  연도별: " + yrs.map(y => `${y.year} ${fmtPct(y.ret, 1)}(낙폭 ${fmtPct(y.mdd, 1)})`).join(" · "),
+      "  무작위: " + wins.map(w => `${w.days}일 +${Math.round(w.pos * 100)}% 중간 ${fmtPct(w.median, 1)} 하위10% ${fmtPct(w.p10, 1)} 최악 ${fmtPct(w.worst, 1)}`).join(" / "),
+      ...risks.map(({ r, x }) => "  " + ln(`위험 ${r * 100}%`, x)),
+      ...alone.map(a => "  " + ln(a.name + "만", a.x)),
+      ...coins.map(c => "  " + ln(c.s + (c.seen ? "" : "(새)"), c.x))].join("\n");
+    info.textContent = `완료 — 처음 보는 기간 연 ${M.before ? fmtPct(M.before.cagr, 1) : "–"} · 전체 최대 낙폭 ${fmtPct(M.all.mdd, 1)}`;
+    log(`견고성 테스트 ${days}일: 연 ${fmtPct(M.all.cagr, 1)} · 낙폭 ${fmtPct(M.all.mdd, 1)} · 처음 보는 기간 연 ${M.before ? fmtPct(M.before.cagr, 1) : "–"}`);
+  } catch (e) { info.textContent = "오류: " + e.message; log("견고성 테스트 " + e.message, "err"); }
+  finally { btn.disabled = false; }
+}
+$("stBtn").onclick = runStress;
 $("applyBtn").onclick = () => {
   const r = labRows[labSel]; if (!r) return;
   const m = COST_MODES[r.costKey], n = Object.keys(broker.positions).length, mkChange = m.market !== S.market;
@@ -1263,6 +1349,7 @@ $("copyBtn").onclick = async () => {
     btResults.length ? `백테스트: ${btResults.map(r => `${r.sym} ${fmtPct(r.stats.totalReturn)} (${r.stats.trades}회, 승률 ${(r.stats.winRate * 100).toFixed(0)}%, 보유 ${fmtPct(r.stats.buyHoldReturn)})`).join(" / ")}` : "",
     labRows.length && labMeta ? `연구실 (${labMeta.days}일 ${labMeta.mode === "rolling" ? `롤링 학습${labMeta.trainD}→검증${labMeta.testD}일 × ${labMeta.nFolds}구간` : "학습70/검증30"}, ${symbols().join("/")}, ${COST_MODES[labMeta.costKey].label}, ${DIR_KO[labMeta.dir]}, 1배, 투자금 ${labMeta.sizing}):\n` + labRows.slice(0, 10).map((r, k) =>
       `  #${k + 1} ${r.name} ${r.tf} | ${r.folds.length > 1 ? `+구간 ${r.foldPos}/${r.folds.length} [${r.folds.map(f => fmtPct(f.test.avg, 1)).join(" ")}] | ` : ""}검증 ${fmtPct(r.test.avg)} ${r.test.trades}회(L${r.test.longs} ${fmtPct(r.test.longPnl, 1)}/S${r.test.shorts} ${fmtPct(r.test.shortPnl, 1)}) 수익÷낙폭 ${isN(r.test.ratio) ? r.test.ratio.toFixed(2) : "∞"} 승률 ${(r.test.winRate * 100).toFixed(0)}% MDD ${fmtPct(r.test.mdd)} PF ${fmtPF(r.test.pf)} | 거래당 ${fmtPct(r.test.edge, 3)} 여유 ${fmtPct(r.test.edge - r.rt, 3)} | 학습 ${fmtPct(r.train.avg)} | 보유 ${fmtPct(r.test.bh)} | 최근설정 ${paramText(r.s, r.p, true)}`).join("\n") : "",
+    stressText,
     labMeta?.combo ? `조합 (${labMeta.combo.names.join(" + ")}): 검증 ${fmtPct(labMeta.combo.avg)} 최대낙폭 ${fmtPct(labMeta.combo.mdd)}` : "",
     labRows[labSel]?.levRows ? `레버리지 (${labRows[labSel].name} ${labRows[labSel].tf}): ` + labRows[labSel].levRows.map(x => `${x.lev}배 ${fmtPct(x.avg)} MDD ${fmtPct(x.mdd)}${x.liq ? ` 청산${x.liq}` : ""}`).join(" / ") : "",
     labRows[labSel]?.exitMap ? `익절·손절 지도 (${labRows[labSel].name} ${labRows[labSel].tf}, 행=손절, 열=${exitAxes(labRows[labSel].s, labRows[labSel].gx).xk || "-"} ${exitAxes(labRows[labSel].s, labRows[labSel].gx).xs.join("/")}): ` + labRows[labSel].exitMap.map(row => `손절${row[0].y}: ` + row.map(c => fmtPct(c.avg, 1) + (c.picked ? "★" + c.picked : "")).join(" ")).join(" | ") : "",

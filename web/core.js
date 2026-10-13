@@ -838,6 +838,91 @@
     st.liquidations = b.nLiq || 0;
     return { stats: st, trades: b.trades, equity, start: from };
   }
+  // 실제 계좌 재현: 여러 전략(슬롯) × 여러 종목이 한 계좌의 현금을 같이 쓰며 매매 (실시간 모의매매와 같은 규칙)
+  // sets: [{ sym, c, I, cm, Im }] 같은 봉 간격. 첫 번째 종목의 시간축을 기준으로 맞춤 (상장 전 구간은 그 종목만 건너뜀)
+  // slots: [{ s, p, dir, share }] share = 비중/합계. 위험%는 실시간과 같이 riskPct × share × 슬롯 수
+  function simulatePortfolio(sets, slots, o) {
+    const fut = o.market === "futures", lev = fut ? Math.max(1, o.leverage || 1) : 1, fr = fut ? (o.fundingRate ?? 0.0001) : 0;
+    const master = sets[0].c, n = master.ts.length, nSlots = slots.length;
+    const runs = [];
+    for (let si = 0; si < nSlots; si++) for (const d of sets) {
+      const { s, p } = slots[si], dir = fut ? (slots[si].dir || o.dir || "both") : "long";
+      const longOn = dir !== "short", shortOn = fut && dir !== "long";
+      const at = d.I.atr(14), dL = longOn ? s.prepare(d.c, p, d.I) : null;
+      const cm = shortOn ? (d.cm || mirror(d.c)) : null, Im = shortOn ? (d.Im || makeI(cm)) : null, dS = shortOn ? s.prepare(cm, p, Im) : null;
+      const pos = new Map(); d.c.ts.forEach((t, k) => pos.set(t, k));
+      runs.push({ key: si + "|" + d.sym, sym: d.sym, c: d.c, s, p, at, dL, dS, cm, idxOf: pos,
+        sigL: longOn ? entrySignals(s, d.c, dL, d.I, p) : null, sigS: shortOn ? entrySignals(s, cm, dS, Im, p) : null,
+        warm: warmupOf(s, p, tfOf(d.c)), share: slots[si].share, slotName: slots[si].name, entryI: null, lastExitI: -1e9,
+        so: { ...o, positionPct: o.positionPct * slots[si].share, riskPct: (o.riskPct ?? 0.01) * slots[si].share * nSlots } });
+    }
+    const b = makeBroker(o), from = Math.max(0, o.from ?? 0), to = Math.min(o.to ?? n, n), px = {}, equity = [], maxPos = o.maxPositions ?? Infinity;
+    for (let t = from; t < to; t++) {
+      const T = master.ts[t];
+      const idx = runs.map(r => r.idxOf.get(T));
+      runs.forEach((r, k) => { const i = idx[k]; if (i != null) px[r.sym] = r.c.open[i]; });
+      for (let k = 0; k < runs.length; k++) {
+        const r = runs[k], i = idx[k];
+        if (i == null || i < 1) continue;
+        const c = r.c, p = r.p;
+        if (r.entryI === null && i >= r.warm && i - r.lastExitI > o.cooldownBars && ok(r.at[i - 1]) && Object.keys(b.positions).length < maxPos) {
+          const L = !!r.sigL && r.sigL[i - 1] === 1, S = !!r.sigS && r.sigS[i - 1] === 1;
+          if (L !== S) {
+            const side = L ? 1 : -1, kind = L ? kindOf(r.s, c, r.dL, i - 1, p) : kindOf(r.s, r.cm, r.dS, i - 1, p);
+            const pl = sizePlan(b.equity(px), b.cash, c.open[i], r.at[i - 1], p, r.so, lev, null, 1, side);
+            if (pl.amount >= (o.minOrder ?? 10)) {
+              openPos(b, r.key, side, c.open[i], pl.amount, c.ts[i - 1], c.ts[i], { atr: r.at[i - 1], lev: pl.lev, riskAmt: pl.riskAmt, symbol: r.sym, slotName: r.slotName }, p, kind);
+              r.entryI = i;
+            }
+          }
+        }
+        if (r.entryI !== null) {
+          const ps = b.positions[r.key];
+          if (fr && i > r.entryI && c.ts[i] % FUNDING_MS === 0) b.fund(r.key, c.open[i], fr);
+          scaleInStep(b, r.key, ps, c.high[i], c.low[i], p);
+          const sig = !r.s.exit ? false : ps.dir > 0 ? r.s.exit(c, r.dL, i, p, ps) : r.s.exit(r.cm, r.dS, i, p, ps);
+          const x = checkExit(ps, c.high[i], c.low[i], c.close[i], i - r.entryI, sig, p);
+          if (x) { b.close(r.key, x.price, x.reason, c.ts[i], x.maker); r.entryI = null; r.lastExitI = i; }
+          else scaleOutStep(b, r.key, ps, c.high[i], c.low[i], p, c.ts[i]);
+        }
+      }
+      runs.forEach((r, k) => { const i = idx[k]; if (i != null) px[r.sym] = r.c.close[i]; });
+      equity.push(b.equity(px));
+    }
+    for (const r of runs) if (r.entryI !== null && b.positions[r.key]) b.close(r.key, px[r.sym], "end_of_data", master.ts[to - 1]);
+    if (equity.length) equity[equity.length - 1] = b.equity(px);
+    const st = stats(b.trades, equity, o.startingCash, to > from ? master.close[to - 1] / master.close[from] - 1 : NaN);
+    st.liquidations = b.nLiq || 0;
+    return { stats: st, trades: b.trades, equity, start: from, ts: master.ts.slice(from, to) };
+  }
+  // ---------- 견고성 분석 (자산 곡선 하나로) ----------
+  const mddArr = (eq, a = 0, b = eq.length) => { let pk = -Infinity, m = 0; for (let k = a; k < b; k++) { pk = Math.max(pk, eq[k]); m = Math.min(m, eq[k] / pk - 1); } return m; };
+  const quant = (arr, q) => { if (!arr.length) return NaN; const s = arr.slice().sort((x, y) => x - y), k = (s.length - 1) * q, lo = Math.floor(k); return s[lo] + (s[Math.min(lo + 1, s.length - 1)] - s[lo]) * (k - lo); };
+  // 무작위 시작일로 days일씩 잘라 그 기간만 돌렸다면? (같은 시드면 같은 결과)
+  function randomWindows(eq, ts, days, count = 300, seed = 1) {
+    const w = Math.round(days * DAY / Math.max(1, ts[1] - ts[0])), n = eq.length - w;
+    if (n <= 0) return null;
+    let sd = seed >>> 0; const rnd = () => (sd = (sd * 1664525 + 1013904223) >>> 0) / 4294967296;
+    const rets = [], mdds = [];
+    for (let k = 0; k < count; k++) { const a = Math.floor(rnd() * n); rets.push(eq[a + w] / eq[a] - 1); mdds.push(mddArr(eq, a, a + w + 1)); }
+    return { days, count, pos: rets.filter(r => r > 0).length / count, median: quant(rets, 0.5), p10: quant(rets, 0.1), worst: Math.min(...rets),
+             best: Math.max(...rets), mddMedian: quant(mdds, 0.5), mddWorst: Math.min(...mdds) };
+  }
+  // 기간 요약: 수익률, 연환산, 최대 낙폭
+  function spanStats(eq, ts, a = 0, b = eq.length) {
+    if (b - a < 2) return null;
+    const ret = eq[b - 1] / eq[a] - 1, yrs = (ts[b - 1] - ts[a]) / (365 * DAY);
+    return { from: ts[a], to: ts[b - 1], ret, cagr: yrs > 0 ? Math.pow(Math.max(1e-9, 1 + ret), 1 / yrs) - 1 : NaN, mdd: mddArr(eq, a, b), years: yrs };
+  }
+  function yearly(eq, ts) {
+    const out = []; let a = 0;
+    for (let k = 1; k <= eq.length; k++) {
+      if (k === eq.length || new Date(ts[k]).getUTCFullYear() !== new Date(ts[a]).getUTCFullYear()) {
+        const s = spanStats(eq, ts, Math.max(0, a - 1), k); if (s) out.push({ year: new Date(ts[a]).getUTCFullYear(), ...s }); a = k;
+      }
+    }
+    return out;
+  }
   function stats(tr, equity, cash, bh) {
     const wins = tr.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0), losses = -tr.filter(t => t.pnl <= 0).reduce((s, t) => s + t.pnl, 0);
     let peak = -Infinity, mdd = 0;
@@ -871,7 +956,7 @@
   }
 
   const Core = { ema, rma, rsi, sma, bollinger, rollMax, rollMin, atr, macd, stochRsi, adx, vwap, makeI,
-                 STRATEGIES, ACTIVE, byId, defaults, grid, gridValues, WIDE_GRID, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, sizeFor, sizePlan, kellyRisk, biasOk, entrySignals, entryKey, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
+                 STRATEGIES, ACTIVE, byId, defaults, grid, gridValues, WIDE_GRID, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, sizeFor, sizePlan, kellyRisk, biasOk, entrySignals, entryKey, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, simulatePortfolio, randomWindows, spanStats, yearly, stats, resample, ok, FUNDING_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
   else root.Core = Core;
 })(typeof window !== "undefined" ? window : globalThis);

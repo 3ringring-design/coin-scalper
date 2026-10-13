@@ -341,6 +341,34 @@ br.buy("X", 100, 1000, 0, 0); assert(Math.abs(br.sell("X", 100, "t", 0).pnl + 1.
   assert(r.equity.every(v => Number.isFinite(v) && v >= 0));
 }
 
+// 13) 실제 계좌 재현 (포트폴리오): 전략 1개 × 종목 1개면 일반 백테스트와 똑같아야 하고, 여러 개면 현금을 같이 씀
+{
+  const near = (a, b, m) => assert(Math.abs(a - b) < 1e-9, `${m}: ${a} vs ${b}`);
+  const mk = seed => { let sd = seed; const r = () => (sd = (sd * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const x = { ts: [], open: [], high: [], low: [], close: [], volume: [] }; let px = 100;
+    for (let i = 0; i < 5000; i++) { const o = px; px *= Math.exp(0.012 * (r() + r() + r() - 1.5) * 1.15);
+      x.ts.push(i * 36e5); x.open.push(o); x.close.push(px); x.high.push(Math.max(o, px) * (1 + r() * 0.004)); x.low.push(Math.min(o, px) * (1 - r() * 0.004)); x.volume.push(1); }
+    return x; };
+  const FO = { ...O, market: "futures", feeRate: 0.0005, makerFee: 0.0002, slippageBps: 3, fundingRate: 0.0001, dir: "both", sizing: "risk", riskPct: 0.02, autoLev: true, maxLev: 3, positionPct: 0.5 };
+  const sP = Core.byId("pullback"), sC = Core.byId("donchian");
+  const pP = { ...Core.defaults(sP), stopAtr: 4, takeAtr: 6, scaleIn: 1, scaleOut: 1 }, pC = { ...Core.defaults(sC), stopAtr: 2.5, trailAtr: 8, regime: 1, runner: 1, scaleIn: 1, scaleOut: 1 };
+  const cA = mk(7), cB = mk(11);
+  const set = (sym, c) => ({ sym, c, I: Core.makeI(c), cm: Core.mirror(c), Im: Core.makeI(Core.mirror(c)) });
+  for (const [s, p] of [[sP, pP], [sC, pC]]) {
+    const one = Core.simulatePortfolio([set("A", cA)], [{ s, p, dir: "both", share: 1 }], FO);
+    const ref = Core.simulate(cA, s, p, { ...FO, symbol: "0|A" });
+    near(one.stats.totalReturn, ref.stats.totalReturn, `포트폴리오 1×1 = 일반 백테스트 (${s.id})`, 1e-9);
+    near(one.trades.length, ref.trades.length, `거래 수 일치 (${s.id})`);
+  }
+  const multi = Core.simulatePortfolio([set("A", cA), set("B", cB)], [{ s: sC, p: pC, dir: "both", share: 0.6 }, { s: sP, p: pP, dir: "both", share: 0.4 }], FO);
+  assert(multi.trades.length > 20 && multi.equity.every(v => Number.isFinite(v) && v > 0), "여러 전략·종목 한 계좌");
+  assert(new Set(multi.trades.map(t => t.symbol)).size === 4, "슬롯 2 × 종목 2 = 4개 매매 단위");
+  const capped = Core.simulatePortfolio([set("A", cA), set("B", cB)], [{ s: sC, p: pC, dir: "both", share: 0.6 }, { s: sP, p: pP, dir: "both", share: 0.4 }], { ...FO, maxPositions: 1 });
+  let open = 0, maxOpen = 0; const ev = capped.trades.flatMap(t => [[t.entryTime, 1], [t.exitTime, -1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  for (const [, d] of ev) { open += d; maxOpen = Math.max(maxOpen, open); }
+  near(maxOpen, 1, "최대 보유 수 제한");
+}
+
 // (선택) 파이썬 결과와 비교
 if (process.argv[2]) {
   const fx = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
