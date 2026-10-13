@@ -262,6 +262,51 @@ br.buy("X", 100, 1000, 0, 0); assert(Math.abs(br.sell("X", 100, "t", 0).pnl + 1.
   assert.strictEqual(Core.grid(v1, null, Core.WIDE_GRID).length, 2);      // v1은 보유 시간만 (고정 % 손절)
 }
 
+// 11) 위험 기준 크기 · 큰 방향 · 러너 · 지정가 진입
+{
+  const near = (a, b, m) => assert(Math.abs(a - b) < 1e-9, `${m}: ${a} vs ${b}`);
+  const R = { positionPct: 1, sizing: "risk", riskPct: 0.01 }, P = { stopAtr: 2 };
+  near(Core.sizeFor(1000, 1000, 100, 2, P, R, 1), 250, "손절 4% → 위험 1% = 250");        // 1000×1% / 4%
+  near(Core.sizeFor(1000, 1000, 100, 2, P, R, 5), 50, "5배면 증거금 50");
+  near(Core.sizeFor(1000, 1000, 100, 0.1, P, R, 1), 1000, "상한은 고정 비중");
+  near(Core.sizeFor(1000, 1000, 100, 2, P, { positionPct: 0.3 }, 1), 300, "고정 모드");
+
+  // 방향성 없는 1시간봉 랜덤워크 (체결강도 포함)
+  const c = (() => {
+    let sd = 4242; const r = () => (sd = (sd * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const x = { ts: [], open: [], high: [], low: [], close: [], volume: [], takerBuy: [] }; let px = 100;
+    for (let i = 0; i < 6000; i++) { const o = px; px *= Math.exp(0.012 * (r() + r() + r() - 1.5) * 1.15); const v = 100 * (0.3 + r());
+      x.ts.push(i * 36e5); x.open.push(o); x.close.push(px); x.high.push(Math.max(o, px) * (1 + r() * 0.004)); x.low.push(Math.min(o, px) * (1 - r() * 0.004));
+      x.volume.push(v); x.takerBuy.push(v * (0.4 + r() * 0.2)); }
+    return x;
+  })();
+  const I = Core.makeI(c), cm = Core.mirror(c), Im = Core.makeI(cm);
+  const F = { ...O, market: "futures", feeRate: 0.0005, slippageBps: 3, makerFee: 0.0002, dir: "both", I, cm, Im };
+  const s = Core.byId("pullback"), p0 = { ...Core.defaults(s), stopAtr: 4 };
+  // 위험 기준: 손절 거래의 손실이 자산의 약 1% (수수료 여유 포함)
+  const rk = Core.simulate(c, s, { ...p0, stopAtr: 1, scaleIn: 0 }, { ...F, sizing: "risk", riskPct: 0.01 });
+  let eq = 1000, sl = 0;
+  for (const t of rk.trades) { if (t.reason === "stop_loss") { sl++; assert(t.pnl >= -0.0115 * eq, `위험 기준 손실 한도 ${t.pnl / eq}`); } eq += t.pnl; }
+  assert(sl > 0, "손절 거래가 있어야 검증 가능");
+  // 큰 방향: 켜면 거래가 같거나 줄고, 숏/롱 손익이 따로 집계됨
+  const base = Core.simulate(c, s, p0, F), bi = Core.simulate(c, s, { ...p0, bias: 1, biasDays: 10 }, F);
+  assert(bi.trades.length <= base.trades.length, "큰 방향 필터");
+  near(base.stats.longPnl + base.stats.shortPnl, base.trades.reduce((a, t) => a + t.pnl, 0) / 1000, "롱+숏 손익 = 전체");
+  // 러너: 분할 익절 뒤에는 익절선·신호 청산 없이 추적/본전/시간으로만
+  const rn = Core.simulate(c, s, { ...p0, scaleOut: 1, runner: 1, runAtr: 3 }, F);
+  assert(rn.trades.filter(t => t.scaled.includes("½")).every(t => !["take_profit", "signal_exit"].includes(t.reason)), "러너 청산 방식");
+  assert(rn.equity.every(Number.isFinite));
+  // 지정가 진입: 체결가는 신호 봉 종가보다 좋은 가격(롱은 낮게), 슬리피지 없음, 일부 신호는 미체결
+  const lm = Core.simulate(c, s, { ...p0, limitEntry: 1, limOff: 0.25, limBars: 3 }, F);
+  assert(lm.trades.length > 0 && lm.trades.length <= base.trades.length + 2, "지정가 체결 수");
+  assert(lm.trades.every(t => Math.abs(t.entryPrice / (t.rawEntry ?? t.entryPrice) - 1) < 1e-12 || t.scaled), "지정가는 슬리피지 없음");
+  // 메이커 익절: 익절 체결가 = 목표가 그대로 (슬리피지 없음)
+  const fb = new Core.FuturesBroker(1000, 0.0005, 10, 0.005, null, 0.0002);
+  fb.open("X", 1, 100, 100, 0, 0, { lev: 1 });
+  const tp = fb.close("X", 110, "take_profit", 0, true);
+  near(tp.exitPrice, 110, "메이커 익절가"); near(fb.cash, 1000 + tp.pnl, "현금 일치");
+}
+
 // (선택) 파이썬 결과와 비교
 if (process.argv[2]) {
   const fx = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
