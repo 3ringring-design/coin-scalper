@@ -24,7 +24,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p out
-          node tools/research.js 2190 2>&1 | tee out/research.txt
+          node tools/research.js 2190 final 2>&1 | tee out/research.txt
       - name: Publish result
         if: always()
         run: |

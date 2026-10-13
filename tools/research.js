@@ -43,6 +43,22 @@ const day = t => new Date(t).toISOString().slice(0, 10);
   };
   const fmt = (label, e) => `${label.padEnd(44)} 연 ${pct(e.all.cagr).padStart(7)} 낙폭 ${pct(e.all.mdd).padStart(7)} | 앞3년 ${pct(e.h1.cagr).padStart(7)} 뒤3년 ${pct(e.h2.cagr).padStart(7)} | 90일 +${Math.round(e.w.pos * 100)}% 하위10% ${pct(e.w.p10)} 최악 ${pct(e.w.worst)} | 30일 최악 ${pct(e.m.worst)} | ${e.n}회${e.liq ? ` 청산${e.liq}` : ""}`;
 
+  if (process.argv[3] === "final") {
+    const CH0 = { ...CH, scaleIn: 0, scaleOut: 0 }, BR = { volTarget: true, ddCut: 0.1, ddMult: 0.5, ddCut2: 0.2, ddMult2: 0.5 };
+    console.log(`최종 후보 검증 · ${day(ts[0])} ~ ${day(ts[ts.length - 1])} · 채널 돌파 롱 · 분할 끔 · 변동성 조절 · 2단 낙폭 브레이크(10%→½, 20%→¼)\n`);
+    const prof = [["v5 (비교)", { ...CH }, { riskPct: 0.01 }], ["안정 1.5%", CH0, { ...BR, riskPct: 0.015 }], ["균형 2%", CH0, { ...BR, riskPct: 0.02 }],
+                  ["공격 3%", CH0, { ...BR, riskPct: 0.03, maxLev: 5 }], ["공격 3% · 레버리지 최대 3배", CH0, { ...BR, riskPct: 0.03, maxLev: 3 }], ["매우 공격 4%", CH0, { ...BR, riskPct: 0.04, maxLev: 5 }]];
+    for (const [n, p, o] of prof) for (const slip of [3, 6]) {
+      const r = run([{ id: "donchian", p, dir: "long" }], { ...o, slippageBps: slip }), e = evalR(r);
+      console.log(fmt(`${n}${slip === 6 ? " · 슬리피지 2배" : ""}`, e));
+      if (slip === 3) {
+        console.log("    연도별: " + Core.yearly(r.equity, r.ts).map(y => `${y.year} ${pct(y.ret)}(${pct(y.mdd, 0)})`).join(" · "));
+        console.log("    무작위: " + [30, 90, 180, 365].map(d => { const w = Core.randomWindows(r.equity, r.ts, d, 400, 11); return `${d}일 +${Math.round(w.pos * 100)}% 중간 ${pct(w.median)} 최악 ${pct(w.worst)}`; }).join(" · "));
+        const lv = r.trades.map(t => t.lev); console.log(`    레버리지 평균 ${(lv.reduce((a, b) => a + b, 0) / lv.length).toFixed(2)} 최대 ${Math.max(...lv)} · 청산 ${r.stats.liquidations}`);
+      }
+    }
+    return;
+  }
   console.log(`기간 ${day(ts[0])} ~ ${day(ts[ts.length - 1])} · 앞/뒤 경계 ${day(mid)} · BTC/ETH/SOL 한 계좌 · 선물 시장가\n`);
 
   // 1) 급락 원인 진단: v5 (채널 롱, 1%)의 큰 낙폭 구간
