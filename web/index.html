@@ -121,9 +121,11 @@ canvas { display: block; width: 100%; height: 240px; }
     <div class="strat-bar" style="border-color:#5a4515">
       <div style="flex:1;min-width:240px">
         <b>⚡ 추천 포트폴리오로 자동 세팅 <span class="badge paper" id="presetVer"></span></b>
-        <div class="note">1년(하락장 포함) 롤링 검증을 통과한 전략만 자금을 나눠 같이 돌려요 · 선물 모의 · 롱+숏 · 손절 시 자산의 2%만 잃도록 금액 자동 계산 · 레버리지는 필요한 만큼 최대 3배 · 계좌를 새로 시작하고 바로 실행</div>
+        <div class="note">6년(2020~2026, 상승·하락장 모두) 실제 계좌 재현 테스트로 고른 세팅 · 선물 모의 · 채널 돌파 롱 · 손절 거리로 금액 자동 계산 · 변동성 조절 · 계좌가 −10%면 위험 ½, −20%면 ¼로 자동 축소 · 계좌를 새로 시작하고 바로 실행<br>
+          <span id="presetStats" class="small"></span></div>
         <div id="presetList" style="margin-top:6px"></div>
       </div>
+      <select id="presetRisk" style="align-self:center"></select>
       <button class="btn primary" id="presetBtn">⚡ 세팅하고 시작</button>
     </div>
     <div class="strat-bar">
@@ -306,6 +308,7 @@ const GENERAL = {
   positionPct: 0.25, maxPositions: 3, minOrder: 10, cooldownBars: 3, strategyId: "v1", interval: "5m", params: null,
   market: "spot", direction: "long", leverage: 1, fundingRate: 0.0001, slots: null,
   makerFee: 0.0002, sizing: "fixed", riskPct: 0.01, autoLev: "off", maxLev: 3,
+  volTarget: "off", ddCut: 0, ddMult: 0.5, ddCut2: 0, ddMult2: 0.5,
 };
 const COST_MODES = {
   spot:     { label: "현물 — 수수료 0.1% + 슬리피지 0.05%", market: "spot", fee: 0.001, maker: 0.001, slip: 5, funding: 0 },
@@ -332,6 +335,11 @@ const GEN_FIELDS = [
   ["riskPct", "거래당 위험 (0.01 = 손절 시 자산의 1%)", "number", "손절 거리 기준일 때만. 전략에서 켈리를 켜면 이 값이 출발점"],
   ["autoLev", "자동 레버리지", [["off", "끔 (아래 레버리지 고정)"], ["on", "켬 (필요한 만큼, 최대 레버리지까지)"]], "위험 기준 금액을 증거금 상한 안에 담을 최소 배수"],
   ["maxLev", "자동 레버리지 최대 (배)", "number"],
+  ["volTarget", "변동성 조절", [["off", "끔"], ["on", "켬 (평소보다 크게 움직이면 위험 줄이고, 잠잠하면 늘림 · 0.5~1.5배)"]], "지금 ATR/가격 ÷ 최근 60일 평균"],
+  ["ddCut", "낙폭 브레이크 1단 (0.1 = 고점 대비 −10%)", "number", "0이면 끔. 계좌가 이만큼 빠져 있는 동안 위험 × 아래 배수"],
+  ["ddMult", "1단 위험 배수", "number"],
+  ["ddCut2", "낙폭 브레이크 2단 (0.2 = −20%)", "number", "0이면 끔. 1단에 추가로 곱함"],
+  ["ddMult2", "2단 위험 배수", "number"],
 ];
 const TFS = ["5m", "15m", "1h"];
 const LAB_TFS = ["1h"];   // 5m·15m은 비용을 넘지 못해 제외
@@ -353,7 +361,8 @@ const liveDir = () => isFut() ? S.direction : "long";
 const liveLev = () => isFut() ? Math.max(1, +S.leverage || 1) : 1;
 const brokerOpts = () => ({ startingCash: +S.startingCash, feeRate: +S.feeRate, slippageBps: +S.slippageBps, cooldownBars: +S.cooldownBars,
   minOrder: +S.minOrder, market: S.market, dir: liveDir(), leverage: liveLev(), fundingRate: isFut() ? +S.fundingRate : 0,
-  makerFee: +S.makerFee, sizing: S.sizing, riskPct: +S.riskPct, autoLev: isFut() && S.autoLev === "on", maxLev: Math.max(1, +S.maxLev || 3) });
+  makerFee: +S.makerFee, sizing: S.sizing, riskPct: +S.riskPct, autoLev: isFut() && S.autoLev === "on", maxLev: Math.max(1, +S.maxLev || 3),
+  volTarget: S.volTarget === "on", ddCut: +S.ddCut || 0, ddMult: +S.ddMult || 0.5, ddCut2: +S.ddCut2 || 0, ddMult2: +S.ddMult2 || 0.5 });
 const marketText = () => isFut() ? `선물 ${DIR_KO[S.direction]} ${liveLev()}배` : "현물 롱";
 
 // ---------------- 포맷 ----------------
@@ -465,14 +474,14 @@ async function liveCandles(sym, iv, need) {
 
 // ---------------- 실시간 모의매매 ----------------
 let live = store.get("cs_live", null);
-let broker, lastEval, lastExit, pending = {}, running;
+let broker, lastEval, lastExit, pending = {}, running, peakEq;
 function loadLive() {
   const st = live?.broker && (live.broker.market || "spot") === S.market ? live.broker : null;   // 시장이 바뀌면 새 계좌
   broker = Core.makeBroker({ ...brokerOpts(), startingCash: st?.startingCash ?? +S.startingCash }, st);
   broker.feeRate = +S.feeRate; broker.slip = +S.slippageBps / 10000;
-  lastEval = live?.lastEval || {}; lastExit = live?.lastExit || {}; pending = live?.pending || {}; running = !!live?.running;
+  lastEval = live?.lastEval || {}; lastExit = live?.lastExit || {}; pending = live?.pending || {}; running = !!live?.running; peakEq = live?.peakEq ?? broker.startingCash;
 }
-function saveLive() { store.set("cs_live", { broker: broker.toJSON(), lastEval, lastExit, pending, running }); }
+function saveLive() { store.set("cs_live", { broker: broker.toJSON(), lastEval, lastExit, pending, running, peakEq }); }
 loadLive();
 
 const prices = {}, watch = {};
@@ -489,7 +498,7 @@ const isPortfolio = () => !!S.slots?.length;
 
 async function stepSlot(sl, sym) {
   const s = slotStrat(sl), p = slotParams(sl), iv = sl.interval, tf = TF_MS[iv], w = Core.warmupOf(s, p, tf), key = posKey(sl, sym);
-  const all = await liveCandles(sym, iv, Math.max(500, w + 60));
+  const all = await liveCandles(sym, iv, Math.max(S.volTarget === "on" ? 1520 : 500, w + 60));
   if (all.ts.length < w + 2) { watch[key] = { err: `데이터 부족 (${all.ts.length}봉, 필요 ${w + 2})` }; return; }
   const price = all.close[all.close.length - 1];
   prices[sym] = price;
@@ -501,7 +510,12 @@ async function stepSlot(sl, sym) {
   const tag = isPortfolio() ? `[${sl.name}] ` : "";
 
   const nSlots = liveSlots().length, totalW = liveSlots().reduce((a, x) => a + (+x.weight || 0), 0) || 1, share = (+sl.weight || 0) / totalW;
-  const sizeOpts = { ...brokerOpts(), positionPct: +S.positionPct * share, riskPct: +S.riskPct * share * nSlots };
+  const sizeOpts0 = { ...brokerOpts(), positionPct: +S.positionPct * share, riskPct: +S.riskPct * share * nSlots };
+  // 계좌 위험 조절 (변동성 · 낙폭 브레이크): 백테스트와 같은 Core.riskControl
+  const eqNow = broker.equity(prices); peakEq = Math.max(peakEq || eqNow, eqNow);
+  let volAvg = NaN; if (sizeOpts0.volTarget && i >= 1440) { let sm = 0, cnt = 0; for (let k = i - 1439; k <= i; k++) if (isN(at[k])) { sm += at[k] / c.close[k]; cnt++; } if (cnt > 1300) volAvg = sm / cnt; }
+  const rk = Core.riskControl(sizeOpts0, sizeOpts0.riskPct, eqNow, peakEq, broker.positions, at[i] / c.close[i], volAvg);
+  const sizeOpts = { ...sizeOpts0, riskPct: rk };
   if (!broker.positions[key] && pending[key]) {      // 지정가 대기 주문
     const pd = pending[key], hit = pd.side > 0 ? price <= pd.lvl : price >= pd.lvl;
     if (hit) {
@@ -556,6 +570,7 @@ async function stepSlot(sl, sym) {
     log(`${tag}${side > 0 ? "롱" : "숏"} 신호 ${sym} → 지정가 대기 @ ${fmtP(pending[key].lvl)} (${p.limBars}봉)`);
     return;
   }
+  if (S.sizing === "risk" && !(rk > 0)) { log(`${tag}${sym} 신호 발생 — 위험 한도라 건너뜀`); return; }
   const pl = Core.sizePlan(broker.equity(prices), broker.cash, price, at[i], p, sizeOpts, liveLev(), slotHistory(sl), 1, side);
   if (pl.amount < +S.minOrder) { log(`${tag}${sym} 신호 발생 — 현금 부족`); return; }
   const ps = Core.openPos(broker, key, side, price, pl.amount, lastTs, Date.now(),
@@ -1225,25 +1240,34 @@ function applyPortfolio(slots, mode, label, opts = {}) {
   if (running) { startTicker(); tick(); }
   return true;
 }
-// v5: 6년(2020-10~2026-10) 실제 계좌 재현 테스트 (tools/stress.js · GitHub Actions)
-//  - v4(채널+눌림목, 롱+숏, 위험 2%): 연 +8.9%, 최대 낙폭 −65% (2021년 −47%) → 위험이 너무 큼
-//  - 위험 1%보다 키우면 수익은 오히려 줄고 낙폭만 커짐 (2% 연 +8.9% / 3% +4.0% / 4% +3.7%)
-//  - 눌림목은 6년 합계 거의 0 (연 +0.1%), 채널 돌파 숏도 거의 0 (연 −0.1%) → 제외
-//  - 채널 돌파 롱만 · 위험 1%: 연 +11.7%, 최대 낙폭 −21%, 연수익÷낙폭 0.55 (후보 중 최고)
-//  - 다른 코인 9개로 넓히면 대부분 마이너스 → BTC·ETH·SOL 유지
+// v6: 6년(2020-10~2026-10) 실제 계좌 재현 · tools/research.js (약 250개 조합, 앞 3년·뒤 3년 둘 다 + 인 것만)
+//  - 분할 매수·매도 끔이 더 좋음 (분할 익절이 큰 추세 수익을 잘라냄). 물타기(눌림목)는 6년 합계 0, 불타기 추가 물량은 레버리지를 올린 것과 같은 효과
+//  - 낙폭 브레이크(−10% → 위험 ½, −20% → ¼) + 변동성 조절이 핵심: 위험 3%에서 낙폭 −80% → −44%
+//  - 위험 3%가 최적: 4%는 수익이 같고(연 +42.7%) 낙폭만 커짐(−52%)
+//  - 수익은 추세장에 몰림: 90일 단위로는 절반만 +, 2021·2022년은 0~−20%
 const PRESET = {
-  version: "v5",
+  version: "v6",
   slots: [
-    { id: "s1", name: "채널 돌파 롱 +추세장 +러너 +분할", strategyId: "donchian", interval: "1h", dir: "long", weight: 100,
-      params: { chN: 20, adxMin: 20, stopAtr: 2.5, trailAtr: 8, regime: 1, runner: 1, scaleIn: 1, scaleOut: 1 }, why: "6년 연 +11.7%, 최대 낙폭 −21% (v4는 −65%)" },
+    { id: "s1", name: "채널 돌파 롱 +추세장", strategyId: "donchian", interval: "1h", dir: "long", weight: 100,
+      params: { chN: 20, adxMin: 20, stopAtr: 2.5, trailAtr: 8, regime: 1, runner: 1, scaleIn: 0, scaleOut: 0 }, why: "6년 실제 계좌 재현 테스트 최고" },
   ],
-  settings: { symbols: "BTCUSDT, ETHUSDT, SOLUSDT", leverage: 1, positionPct: 0.5, sizing: "risk", riskPct: 0.01, autoLev: "on", maxLev: 3, cooldownBars: 3, pollSeconds: 15 },
+  settings: { symbols: "BTCUSDT, ETHUSDT, SOLUSDT", leverage: 1, positionPct: 0.5, sizing: "risk", autoLev: "on", cooldownBars: 3, pollSeconds: 15,
+              volTarget: "on", ddCut: 0.1, ddMult: 0.5, ddCut2: 0.2, ddMult2: 0.5 },
+  levels: [
+    { key: "a", label: "공격 · 위험 3%", riskPct: 0.03, maxLev: 5, stats: "6년 연 +42% · 최대 낙폭 −44% · 최악의 해 −20% (2022) · 최고 +126% (2023) · 슬리피지 2배면 연 +35%" },
+    { key: "b", label: "균형 · 위험 2%", riskPct: 0.02, maxLev: 3, stats: "6년 연 +29% · 최대 낙폭 −36% · 최악의 해 −14% (2022) · 최고 +74% (2023)" },
+    { key: "s", label: "안정 · 위험 1.5%", riskPct: 0.015, maxLev: 3, stats: "6년 연 +26% · 최대 낙폭 −30% · 최악의 해 −11% (2022) · 최고 +73% (2023)" },
+  ],
 };
-$("presetVer").textContent = PRESET.version + " · 6년 검증 · 위험 1% · 자동 레버리지";
-$("presetList").innerHTML = PRESET.slots.map(sl => `<span class="kv" title="${esc(sl.why)}">${esc(sl.name)} · ${sl.interval} · ${sl.weight}%</span>`).join("") +
-  `<span class="muted small"> BTC·ETH·SOL</span>`;
+$("presetRisk").innerHTML = PRESET.levels.map(l => `<option value="${l.key}">${l.label}</option>`).join("");
+const presetLevel = () => PRESET.levels.find(l => l.key === $("presetRisk").value) || PRESET.levels[0];
+const syncPreset = () => { const l = presetLevel(); $("presetVer").textContent = `${PRESET.version} · ${l.label}`; $("presetStats").textContent = "백테스트: " + l.stats + " · 30일 단위로는 절반 정도만 + (수익이 추세장에 몰려요)"; };
+$("presetRisk").onchange = syncPreset; syncPreset();
+$("presetList").innerHTML = PRESET.slots.map(sl => `<span class="kv" title="${esc(sl.why)}">${esc(sl.name)} · ${sl.interval}</span>`).join("") + `<span class="muted small"> BTC·ETH·SOL</span>`;
 $("presetBtn").onclick = () => {
-  if (applyPortfolio(PRESET.slots.map(({ why, ...sl }) => ({ ...sl })), COST_MODES.futTaker, `⚡ 추천 세팅 ${PRESET.version}`, { settings: PRESET.settings, start: true })) toast("세팅 완료 · 실행 중이에요");
+  const l = presetLevel();
+  if (applyPortfolio(PRESET.slots.map(({ why, ...sl }) => ({ ...sl })), COST_MODES.futTaker, `⚡ 추천 세팅 ${PRESET.version} ${l.label}`,
+      { settings: { ...PRESET.settings, riskPct: l.riskPct, maxLev: l.maxLev }, start: true })) toast("세팅 완료 · 실행 중이에요");
 };
 
 // ---------------- 설정 화면 ----------------
