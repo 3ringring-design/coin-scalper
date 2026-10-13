@@ -2,6 +2,7 @@ name: Build Windows exe
 
 # main 브랜치에 코드가 올라올 때마다 윈도우 exe를 자동으로 만들어
 # 저장소의 Releases > "latest" 에 올립니다.
+# 빌드 결과와 로그는 ci-status 브랜치에 기록돼요 (Claude가 확인용으로 읽음).
 on:
   push:
     branches: [main]
@@ -9,6 +10,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: build-exe
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -20,16 +25,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install
-        run: pip install -r requirements.txt pyinstaller
-
-      - name: Test
-        run: python -m pytest -q
-
-      - name: Build exe
+      - name: Install, test, build
+        id: build
+        shell: bash
         run: |
-          pyinstaller --onefile --name CoinScalper --collect-all ccxt --add-data "config.yaml;." run.py
-          pyinstaller --onefile --name Backtest --collect-all ccxt --add-data "config.yaml;." backtest.py
+          set -o pipefail
+          mkdir -p ci
+          {
+            pip install -r requirements.txt pyinstaller &&
+            python -m pytest -q &&
+            pyinstaller --onefile --name CoinScalper --collect-all ccxt --add-data "config.yaml;." run.py &&
+            pyinstaller --onefile --name Backtest --collect-all ccxt --add-data "config.yaml;." backtest.py &&
+            echo "--- built files ---" &&
+            ls -la dist
+          } 2>&1 | tee ci/build.log
 
       - name: Package
         shell: pwsh
@@ -52,3 +61,23 @@ jobs:
           gh release create latest CoinScalper-windows.zip \
             --title "최신 윈도우 실행파일" \
             --notes "main 브랜치 최신 코드로 자동 빌드됐어요. CoinScalper-windows.zip 을 받아서 압축을 풀고 README.txt 를 보세요."
+
+      - name: Report status to ci-status branch
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p ci && cd ci
+          {
+            echo "run_number: ${{ github.run_number }}"
+            echo "run_id: ${{ github.run_id }}"
+            echo "commit: ${{ github.sha }}"
+            echo "build_step: ${{ steps.build.outcome }}"
+            echo "job: ${{ job.status }}"
+            echo "finished_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > status.txt
+          git init -q -b ci-status
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -qm "CI #${{ github.run_number }}: ${{ job.status }}"
+          git push -f -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-status
