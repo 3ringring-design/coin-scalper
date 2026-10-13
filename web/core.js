@@ -434,7 +434,7 @@
     X("kelly", "켈리 동적 위험 (0 끔 · 1 켬)", 0), X("kellyFrac", "켈리 비율 (0.25 = 1/4 켈리)", 0.25), X("kellyN", "켈리 계산 거래 수 (최근)", 30),
     X("riskMin", "동적 위험 최소 (0.005 = 0.5%)", 0.005), X("riskMax", "동적 위험 최대 (0.03 = 3%)", 0.03));
   // 보관: 여러 번의 롤링 검증에서 상위권에 들지 못한 전략 (코드는 남겨서 예전 설정은 계속 동작, 연구실에서는 제외)
-  const RETIRED = new Set(["v1", "stochrsi", "vwap", "macd", "intramom", "season", "volbreak", "ensemble"]);
+  const RETIRED = new Set(["v1", "stochrsi", "vwap", "macd", "intramom", "season", "volbreak", "ensemble", "squeeze", "capitulation"]);
   for (const s of STRATEGIES) s.retired = RETIRED.has(s.id);
   const ACTIVE = () => STRATEGIES.filter(s => !s.retired);
   const KIND_REGIME = { trend: 1, revert: 2 };
@@ -739,22 +739,25 @@
   // 포지션 크기: 고정(자산 × 비중) 또는 위험 기준(손절에 걸리면 자산의 riskPct만 잃도록 역산, 고정 비중이 상한)
   // 켈리 기준: 최근 거래의 승률 W와 평균 이익/평균 손실 비율 R(손절 위험 대비 배수)로 f* = W − (1−W)/R.
   // 추정 오차가 크므로 kellyFrac(기본 1/4)만 쓰고 riskMin~riskMax로 제한. 거래가 10개 미만이면 기본 위험 사용.
-  function kellyRisk(hist, p, base) {
-    const h = (hist || []).filter(t => t.reason !== "end_of_data").slice(-(p.kellyN || 30));
+  function kellyRisk(hist, p, base, dir) {
+    const all = (hist || []).filter(t => t.reason !== "end_of_data");
+    const same = dir ? all.filter(t => (t.dir || 1) === dir) : all;
+    const useDir = !!dir && same.length >= 10;
+    const h = (useDir ? same : all).slice(-(p.kellyN || 30));
     if (h.length < 10) return { risk: base, f: null, n: h.length };
     const r = h.map(t => ok(t.rmult) ? t.rmult : t.pnlPct), wins = r.filter(x => x > 0), losses = r.filter(x => x <= 0);
     const W = wins.length / r.length;
-    if (!losses.length) return { risk: p.riskMax, f: Infinity, n: h.length, W };
+    if (!losses.length) return { risk: p.riskMax, f: Infinity, n: h.length, W, byDir: useDir };
     const R = (wins.reduce((a, x) => a + x, 0) / Math.max(1, wins.length)) / (-losses.reduce((a, x) => a + x, 0) / losses.length || 1e-9);
     const f = W - (1 - W) / Math.max(R, 1e-9);
-    return { risk: Math.min(p.riskMax, Math.max(p.riskMin, p.kellyFrac * f)), f, n: h.length, W, R };
+    return { risk: Math.min(p.riskMax, Math.max(p.riskMin, p.kellyFrac * f)), f, n: h.length, W, R, byDir: useDir };
   }
   // 포지션 크기 계획: 고정(자산 × 비중) / 위험 기준(손절 시 자산의 risk%) / 켈리(위험%를 최근 성적으로 조절).
   // autoLev면 필요한 포지션을 증거금 상한 안에 담을 수 있는 최소 레버리지(maxLev 이하)를 자동 선택.
-  function sizePlan(equity, cash, price, atr, p, o, lev, hist, share = 1) {
+  function sizePlan(equity, cash, price, atr, p, o, lev, hist, share = 1, dir) {
     const capMargin = Math.min(equity * o.positionPct * share, cash);
     if (o.sizing !== "risk" && !p.kelly) return { amount: capMargin, lev, risk: null };
-    const k = p.kelly ? kellyRisk(hist, p, o.riskPct ?? 0.01) : null;
+    const k = p.kelly ? kellyRisk(hist, p, o.riskPct ?? 0.01, dir) : null;
     const risk = (k ? k.risk : o.riskPct ?? 0.01) * share;
     const stopFrac = Math.max(p.stopPct != null ? p.stopPct : (p.stopAtr * atr) / price, 1e-4);
     const notional = (equity * risk) / stopFrac;
@@ -799,7 +802,7 @@
       if (pend && entryI === null) {
         const lv = pend.side > 0 ? Math.min(pend.lvl, c.open[i]) : Math.max(pend.lvl, c.open[i]);
         if (pend.side > 0 ? c.low[i] <= pend.lvl : c.high[i] >= pend.lvl) {
-          const pl = sizePlan(b.equityOne(sym, lv), b.cash, lv, pend.atr, p, o, lev, o.kellySeed ? o.kellySeed.concat(b.trades) : b.trades);
+          const pl = sizePlan(b.equityOne(sym, lv), b.cash, lv, pend.atr, p, o, lev, o.kellySeed ? o.kellySeed.concat(b.trades) : b.trades, 1, pend.side);
           if (pl.amount >= (o.minOrder ?? 10)) { openPos(b, sym, pend.side, lv, pl.amount, pend.ts, c.ts[i], { atr: pend.atr, lev: pl.lev, maker: true, riskAmt: pl.riskAmt }, p, pend.kind); entryI = i; }
           pend = null;
         } else if (i >= pend.expire) pend = null;
@@ -812,7 +815,7 @@
             pend = { side, lvl: c.close[i - 1] - side * p.limOff * at[i - 1], expire: i - 1 + p.limBars, atr: at[i - 1], ts: c.ts[i - 1], kind };
             i--; continue;                                   // 같은 봉에서 바로 체결 여부 확인
           }
-          const pl = sizePlan(b.equityOne(sym, c.open[i]), b.cash, c.open[i], at[i - 1], p, o, lev, o.kellySeed ? o.kellySeed.concat(b.trades) : b.trades);
+          const pl = sizePlan(b.equityOne(sym, c.open[i]), b.cash, c.open[i], at[i - 1], p, o, lev, o.kellySeed ? o.kellySeed.concat(b.trades) : b.trades, 1, side);
           if (pl.amount >= (o.minOrder ?? 10)) {
             openPos(b, sym, side, c.open[i], pl.amount, c.ts[i - 1], c.ts[i], { atr: at[i - 1], lev: pl.lev, riskAmt: pl.riskAmt }, p, kind);
             entryI = i;

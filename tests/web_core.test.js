@@ -316,6 +316,13 @@ br.buy("X", 100, 1000, 0, 0); assert(Math.abs(br.sell("X", 100, "t", 0).pnl + 1.
   near(Core.kellyRisk(mk(12, 8, 1, -0.5), K, 0.01).risk, 0.03, "W 0.6, R 2 → f 0.4 → 1/4 = 10% → 최대 3%");
   near(Core.kellyRisk(mk(11, 9), K, 0.01).risk, 0.25 * (0.55 - 0.45 / 1), "W 0.55, R 1 → f 0.1 → 1/4 켈리 2.5%");
   near(Core.kellyRisk(mk(4, 6), K, 0.01).risk, 0.005, "우위 없음 → 최소 위험");
+  // 상황별: 숏은 잘 맞고(승 12/15) 롱은 안 맞으면(승 3/15) → 숏엔 크게, 롱엔 최소로
+  const hist = [...Array(12).fill({ dir: -1, rmult: 1 }), ...Array(3).fill({ dir: -1, rmult: -1 }),
+                ...Array(3).fill({ dir: 1, rmult: 1 }), ...Array(12).fill({ dir: 1, rmult: -1 })];
+  const KK = { ...K, riskMax: 0.08, kellyFrac: 0.5 };
+  near(Core.kellyRisk(hist, KK, 0.01, -1).risk, 0.08, "숏: W 0.8 → 1/2 켈리 30% → 최대 8%");
+  near(Core.kellyRisk(hist, KK, 0.01, 1).risk, 0.005, "롱: 우위 없음 → 최소");
+  near(Core.kellyRisk(hist, KK, 0.01).risk, 0.005, "합쳐서 보면 W 0.5 → 우위 없음");
   // 자동 레버리지: 손절 1%에 위험 2% → 필요 포지션 2,000, 증거금 상한 330 → 3배 상한
   const pl = Core.sizePlan(1000, 1000, 100, 0.5, { stopAtr: 2 }, { positionPct: 0.33, sizing: "risk", riskPct: 0.02, autoLev: true, maxLev: 3 }, 1, []);
   near(pl.lev, 3, "자동 레버리지 상한"); near(pl.amount, 330, "증거금 상한"); near(pl.riskAmt, 9.9, "실제 위험 금액");

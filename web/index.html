@@ -121,7 +121,7 @@ canvas { display: block; width: 100%; height: 240px; }
     <div class="strat-bar" style="border-color:#5a4515">
       <div style="flex:1;min-width:240px">
         <b>⚡ 추천 포트폴리오로 자동 세팅 <span class="badge paper" id="presetVer"></span></b>
-        <div class="note">연구실 롤링 검증에서 가장 꾸준했던 3개 전략을 자금을 나눠 같이 돌려요 · 선물 모의 · 롱+숏 · 1배 · 계좌를 새로 시작하고 바로 실행</div>
+        <div class="note">1년(하락장 포함) 롤링 검증을 통과한 전략만 자금을 나눠 같이 돌려요 · 선물 모의 · 롱+숏 · 손절 시 자산의 2%만 잃도록 금액 자동 계산 · 레버리지는 필요한 만큼 최대 3배 · 계좌를 새로 시작하고 바로 실행</div>
         <div id="presetList" style="margin-top:6px"></div>
       </div>
       <button class="btn primary" id="presetBtn">⚡ 세팅하고 시작</button>
@@ -183,12 +183,7 @@ canvas { display: block; width: 100%; height: 240px; }
           <span class="muted small" id="labCostNote"></span>
         </div>
         <div class="chips" id="labStrats" style="margin-bottom:10px"></div>
-        <div class="row"><label class="muted small">필터 비교</label>
-          <select id="labFilter">
-            <option value="none">기본만</option>
-            <option value="regime">기본 + 시장 상태</option>
-          </select>
-          <label class="muted small" style="margin-left:8px">분할 비교</label>
+        <div class="row"><label class="muted small">분할</label>
           <select id="labSplit">
             <option value="both">분할 매수·매도 켬 (추천)</option>
             <option value="out">분할 매도만</option>
@@ -196,12 +191,12 @@ canvas { display: block; width: 100%; height: 240px; }
             <option value="none">분할 끔</option>
           </select>
           <label class="chip" title="손절·익절·추적손절 비교값을 2.5~8 ATR로, 최대 보유 시간을 3배까지 넓혀서 비교해요"><input type="checkbox" id="labWide"> 넓은 익절·손절 탐색 (2.5~8 ATR)</label>
-          <span class="muted small">시장 상태: 추세형은 추세장, 되돌림형은 횡보장에서만 · 분할: 총 투자금·최초 손절선은 그대로</span></div>
+          <span class="muted small">추세형(채널 돌파)은 추세장 필터 + 러너가 자동으로 붙어요 (1년 검증에서 효과 확인) · 분할: 총 투자금·최초 손절선은 그대로</span></div>
         <div class="row"><label class="muted small">추가 비교</label>
           <label class="chip" title="30일 추세선 위에서는 롱만, 아래에서는 숏만"><input type="checkbox" id="labBias"> 큰 방향 필터</label>
-          <label class="chip" title="분할 익절 뒤 남은 절반은 익절선·신호 청산 없이 추적손절(3 ATR)로만"><input type="checkbox" id="labRunner"> 러너</label>
-          <label class="chip" title="신호 뒤 0.25 ATR 더 좋은 가격에 지정가로 3봉 대기, 안 닿으면 취소"><input type="checkbox" id="labLimit"> 지정가 진입</label>
-          <label class="chip" title="최근 30거래의 승률·손익비로 1/4 켈리 위험%(0.5~3%)를 매번 다시 계산. 학습 구간 거래로 시작값을 잡아요"><input type="checkbox" id="labKelly"> 켈리 동적 위험</label>
+          <label class="chip" title="롱·숏 각각 최근 30거래의 승률·손익비로 켈리 위험%를 매번 다시 계산 — 잘 맞는 쪽에 더 크게. 학습 구간 거래로 시작값을 잡아요"><input type="checkbox" id="labKelly"> 켈리 동적 위험</label>
+          <select id="labKellyFrac" title="켈리 강도"><option value="0.25">1/4 켈리</option><option value="0.5">1/2 켈리 (공격적)</option></select>
+          <span class="muted small">최대</span><input type="number" id="labRiskMax" value="5" min="1" max="20" step="1" style="width:56px"><span class="muted small">%</span>
           <label class="chip" title="위험 기준 금액이 증거금 상한을 넘으면 필요한 만큼 레버리지를 자동으로 (최대 배수까지)"><input type="checkbox" id="labAutoLev"> 자동 레버리지 최대</label><input type="number" id="labMaxLev" value="3" min="1" max="20" style="width:56px"><span class="muted small">배</span>
           <label class="muted small" style="margin-left:8px">투자 금액</label>
           <select id="labSizing"><option value="fixed">고정 (종목당 자산 100%)</option><option value="risk">손절 거리 기준</option></select>
@@ -215,7 +210,11 @@ canvas { display: block; width: 100%; height: 240px; }
     </div>
     <div class="progress" id="labProg"><div></div></div>
     <div class="panel">
-      <h2>순위 <span class="muted small" id="labHead">통과 구간 수 → 검증 수익률 순 · 레버리지 1배 · 종목 평균 · 행을 누르면 상세 · ☐로 조합에 담기</span></h2>
+      <h2>순위 <span class="muted small" id="labHead">통과(구간 60%↑ · 수익÷낙폭 0.2↑ · 거래 20↑) → 수익÷낙폭 순 · 종목 평균 · 행을 누르면 상세 · ☐로 조합에 담기</span></h2>
+      <div class="row pad" style="margin:0;border-bottom:1px solid var(--line)">
+        <button class="btn primary small" id="autoRecBtn">🤖 이 결과로 추천 세팅 만들기</button>
+        <span class="muted small">통과한 것만 전략별로 가장 좋은 버전을 골라 수익÷낙폭 비율대로 비중을 나눠요. 탈락한 전략·옵션은 자동으로 빠져요.</span>
+      </div>
       <div class="scroll"><table id="labTbl"><tr><td class="empty">아직 실행하지 않았어요.</td></tr></table></div>
     </div>
     <div class="panel" id="comboPanel" style="display:none">
@@ -326,7 +325,7 @@ const GEN_FIELDS = [
   ["maxLev", "자동 레버리지 최대 (배)", "number"],
 ];
 const TFS = ["5m", "15m", "1h"];
-const LAB_TFS = ["15m", "1h"];
+const LAB_TFS = ["1h"];   // 5m·15m은 비용을 넘지 못해 제외
 const TF_MS = { "1m": 6e4, "3m": 18e4, "5m": 3e5, "15m": 9e5, "1h": 36e5 };
 
 const store = {
@@ -499,7 +498,7 @@ async function stepSlot(sl, sym) {
     if (hit) {
       delete pending[key];
       const fill = pd.side > 0 ? Math.min(pd.lvl, price) : Math.max(pd.lvl, price);
-      const pl = Core.sizePlan(broker.equity(prices), broker.cash, fill, pd.atr, p, sizeOpts, liveLev(), slotHistory(sl));
+      const pl = Core.sizePlan(broker.equity(prices), broker.cash, fill, pd.atr, p, sizeOpts, liveLev(), slotHistory(sl), 1, pd.side);
       if (pl.amount >= +S.minOrder && Object.keys(broker.positions).length < +S.maxPositions) {
         const ps = Core.openPos(broker, key, pd.side, fill, pl.amount, pd.candleTs, Date.now(),
           { atr: pd.atr, strategy: s.id, lev: pl.lev, riskAmt: pl.riskAmt, symbol: sym, slotName: isPortfolio() ? sl.name : undefined, maker: true }, p, pd.kind);
@@ -548,7 +547,7 @@ async function stepSlot(sl, sym) {
     log(`${tag}${side > 0 ? "롱" : "숏"} 신호 ${sym} → 지정가 대기 @ ${fmtP(pending[key].lvl)} (${p.limBars}봉)`);
     return;
   }
-  const pl = Core.sizePlan(broker.equity(prices), broker.cash, price, at[i], p, sizeOpts, liveLev(), slotHistory(sl));
+  const pl = Core.sizePlan(broker.equity(prices), broker.cash, price, at[i], p, sizeOpts, liveLev(), slotHistory(sl), 1, side);
   if (pl.amount < +S.minOrder) { log(`${tag}${sym} 신호 발생 — 현금 부족`); return; }
   const ps = Core.openPos(broker, key, side, price, pl.amount, lastTs, Date.now(),
     { atr: at[i], strategy: s.id, lev: pl.lev, riskAmt: pl.riskAmt, symbol: sym, slotName: isPortfolio() ? sl.name : undefined }, p, kind);
@@ -560,7 +559,7 @@ function slotHistory(sl) {
   return broker.trades.filter(t => pre ? String(t.symbol).startsWith(pre) : !String(t.symbol).includes("|"));
 }
 const planText = pl => pl.risk == null ? "" : ` · 위험 ${(pl.risk * 100).toFixed(2)}%` +
-  (pl.kelly ? (pl.kelly.f == null ? ` (켈리 대기: 거래 ${pl.kelly.n}/10)` : ` (켈리 · 승률 ${Math.round(pl.kelly.W * 100)}%${isN(pl.kelly.R) ? ` · 손익비 ${pl.kelly.R.toFixed(2)}` : ""})`) : "");
+  (pl.kelly ? (pl.kelly.f == null ? ` (켈리 대기: 거래 ${pl.kelly.n}/10)` : ` (켈리${pl.kelly.byDir ? " · 같은 방향" : ""} · 승률 ${Math.round(pl.kelly.W * 100)}%${isN(pl.kelly.R) ? ` · 손익비 ${pl.kelly.R.toFixed(2)}` : ""})`) : "");
 
 // ---------- 탭 잠금: 같은 계좌를 여러 탭이 동시에 매매하지 않도록 (실행 중인 탭이 15초마다 표시) ----------
 const TAB_ID = Math.random().toString(36).slice(2);
@@ -820,16 +819,18 @@ function renderLabControls() {
   };
   $("labCost").onchange = sync; sync();
   $("labTfs").innerHTML = LAB_TFS.map(t => `<label class="chip"><input type="checkbox" value="${t}" ${tfs.includes(t) ? "checked" : ""}>${t}</label>`).join("");
-  { const fv = store.get("cs_lab_filter", "regime"); $("labFilter").value = fv === "none" || fv === false ? "none" : "regime"; }
   $("labSplit").value = store.get("cs_lab_split2", "both");
   $("labWide").checked = store.get("cs_lab_wide", false);
-  { const ex = store.get("cs_lab_extra", {}); $("labBias").checked = !!ex.bias; $("labRunner").checked = !!ex.runner; $("labLimit").checked = !!ex.limit;
+  { const ex = store.get("cs_lab_extra", { bias: true, sizing: "risk", autoLev: true }); $("labBias").checked = ex.bias !== false;
+    $("labKellyFrac").value = String(ex.kellyFrac ?? 0.25); $("labRiskMax").value = ex.riskMax ?? 5;
     $("labKelly").checked = !!ex.kelly; $("labAutoLev").checked = !!ex.autoLev; $("labMaxLev").value = ex.maxLev ?? 3;
     $("labSizing").value = ex.sizing || "fixed"; $("labRisk").value = ex.risk ?? 2; }
   const syncSz = () => { $("labRiskBox").style.display = $("labSizing").value === "risk" ? "" : "none"; };
   $("labSizing").onchange = syncSz; syncSz();
   $("labStrats").innerHTML = Core.ACTIVE().map(s => `<label class="chip" title="${esc(s.desc)}"><input type="checkbox" value="${s.id}" ${sel.includes(s.id) ? "checked" : ""}>${s.name} <span class="muted small">${Core.grid(s).length}</span></label>`).join("");
 }
+// 통과: 구간 60% 이상 +, 수익÷낙폭 0.2 이상, 거래 20회 이상
+const passes = r => r.test.trades >= 20 && r.foldPos / r.folds.length >= 0.6 && r.test.ratio >= 0.2 ? 1 : 0;
 function verdict(r) {
   if (r.test.trades < 5) return `<span class="pill">거래 적음</span>`;
   const n = r.folds.length, pos = r.foldPos, ratio = pos / n, tag = n > 1 ? ` ${pos}/${n}` : "";
@@ -865,14 +866,15 @@ async function runLab() {
   const plan = foldPlan(mode, days, trainD, testD, now);
   if (!plan.length) { toast("전체 기간이 학습+검증보다 길어야 해요"); return; }
   store.set("cs_lab_tfs", tfs); store.set("cs_lab_strats", ids); store.set("cs_lab_mode", { mode, days, train: trainD, test: testD });
-  const filterMode = $("labFilter").value; store.set("cs_lab_filter", filterMode);
   const splitMode = $("labSplit").value; store.set("cs_lab_split2", splitMode);
   const gx = $("labWide").checked ? Core.WIDE_GRID : null; store.set("cs_lab_wide", !!gx);
-  const extra = { bias: $("labBias").checked, runner: $("labRunner").checked, limit: $("labLimit").checked, sizing: $("labSizing").value, risk: +$("labRisk").value || 2,
-                  kelly: $("labKelly").checked, autoLev: $("labAutoLev").checked, maxLev: Math.max(1, +$("labMaxLev").value || 3) };
+  const extra = { bias: $("labBias").checked, sizing: $("labSizing").value, risk: +$("labRisk").value || 2,
+                  kelly: $("labKelly").checked, kellyFrac: +$("labKellyFrac").value || 0.25, riskMax: Math.max(1, +$("labRiskMax").value || 5),
+                  autoLev: $("labAutoLev").checked, maxLev: Math.max(1, +$("labMaxLev").value || 3) };
   store.set("cs_lab_extra", extra);
-  const EXTRAS = [...(extra.bias ? [[" +큰방향", { bias: 1 }]] : []), ...(extra.runner ? [[" +러너", { runner: 1, scaleOut: 1 }]] : []),
-                  ...(extra.limit ? [[" +지정가", { limitEntry: 1 }]] : []), ...(extra.kelly ? [[" +켈리", { kelly: 1 }]] : [])];
+  const KELLY = { kelly: 1, kellyFrac: extra.kellyFrac, riskMax: extra.riskMax / 100 };
+  const EXTRAS = [...(extra.bias ? [[" +큰방향", { bias: 1 }]] : []), ...(extra.kelly ? [[" +켈리", KELLY]] : []),
+                  ...(extra.bias && extra.kelly ? [[" +큰방향 +켈리", { bias: 1, ...KELLY }]] : [])];
   const SPLITS = { all: [["", null], [" +분할매수", { scaleIn: 1 }], [" +분할매도", { scaleOut: 1 }], [" +분할매수·매도", { scaleIn: 1, scaleOut: 1 }]],
     both: [[" +분할매수·매도", { scaleIn: 1, scaleOut: 1 }]], out: [[" +분할매도", { scaleOut: 1 }]], none: [["", null]] }[splitMode];
   const costKey = $("labCost").value, cmode = COST_MODES[costKey], dir = cmode.market === "spot" ? "long" : $("labDir").value;
@@ -880,9 +882,9 @@ async function runLab() {
   const rt = 2 * (cmode.fee + cmode.slip / 1e4);
   const strats = ids.map(Core.byId), btn = $("labBtn"),
         variants = strats.flatMap(s => {
-          const out = [{ s, name: s.name, ov: null }], R = Core.KIND_REGIME[s.kind], rn = s.kind === "trend" ? " +추세장만" : " +횡보장만";
-          const flowable = s.kind !== "time";
-          if (filterMode !== "none" && R) out.push({ s, name: s.name + rn, ov: { regime: R } });
+          // 추세형: 추세장 필터 + 러너 자동 (1년 검증: 필터 없으면 상위권 탈락, 러너로 수익÷낙폭 0.59 → 0.80)
+          // 되돌림형: 필터 없이 (횡보장 필터는 결과가 거의 같았음), 러너 없음 (오히려 나빠짐)
+          const out = s.kind === "trend" ? [{ s, name: s.name + " +추세장만 +러너", ov: { regime: 1, runner: 1, scaleOut: 1 } }] : [{ s, name: s.name, ov: null }];
           const withSplit = out.flatMap(v => SPLITS.map(([sn, so]) => ({ s: v.s, name: v.name + sn, ov: v.ov || so ? { ...(v.ov || {}), ...(so || {}) } : null })));
           return withSplit.flatMap(v => [v, ...EXTRAS.map(([en, eo]) => ({ s: v.s, name: v.name + en, ov: { ...(v.ov || {}), ...eo } }))]);
         }), prog = $("labProg"), bar = prog.firstElementChild;
@@ -958,7 +960,7 @@ async function runLab() {
       row.test.ratio = row.test.mdd < 0 ? row.test.avg / -row.test.mdd : Infinity;
       row.foldPos = folds.filter(f => f.test.avg > 0).length;
       labRows.push(row);
-      labRows.sort((a, b) => (a.test.trades < 5) - (b.test.trades < 5) || b.foldPos / b.folds.length - a.foldPos / a.folds.length || b.test.avg - a.test.avg);
+      labRows.sort((a, b) => (a.test.trades < 5) - (b.test.trades < 5) || passes(b) - passes(a) || (b.test.ratio || -9) - (a.test.ratio || -9));
       labSel = 0; labSymSel = 0; renderLab(0);
       await sleep0();
     }
@@ -1082,6 +1084,23 @@ function renderCombo() {
   drawChart($("comboCanvas"), sel, rows[0].opt.startingCash);
   labMeta && (labMeta.combo = { names: rows.map(r => `${r.name} ${r.tf}`), avg, mdd });
 }
+$("autoRecBtn").onclick = () => {
+  if (!labRows.length) { toast("먼저 연구를 돌려주세요"); return; }
+  const cands = labRows.filter(passes);
+  const best = {};
+  for (const r of cands) if (!best[r.s.id] || r.test.ratio > best[r.s.id].test.ratio) best[r.s.id] = r;
+  const rows = Object.values(best);
+  const dropped = [...new Set(labRows.map(r => r.s.name))].filter(n => !rows.some(r => r.s.name === n));
+  if (!rows.length) { alert("이번 연구에서 통과한 전략이 없어요.\n지금 실행 중인 세팅을 그대로 두는 걸 추천해요."); return; }
+  const wOf = r => Math.max(0.05, isN(r.test.ratio) ? r.test.ratio : 0.05), tot = rows.reduce((a, r) => a + wOf(r), 0);
+  const slots = rows.map((r, k) => ({ id: "s" + (k + 1), name: r.name, strategyId: r.s.id, interval: r.tf, params: { ...r.p }, dir: r.dir,
+                                      weight: Math.max(10, Math.round(wOf(r) / tot * 100)) }));
+  const ex = store.get("cs_lab_extra", {});
+  const settings = { sizing: ex.sizing || "fixed", riskPct: (ex.risk || 2) / 100, autoLev: ex.autoLev ? "on" : "off", maxLev: ex.maxLev || 3, leverage: 1, positionPct: 0.5 };
+  applyPortfolio(slots, COST_MODES[rows[0].costKey],
+    `🤖 연구실 자동 추천 · ${labMeta?.days || "?"}일 · ${settings.sizing === "risk" ? `위험 ${(settings.riskPct * 100).toFixed(1)}%` : "고정 비중"}${settings.autoLev === "on" ? ` · 자동 레버리지 ≤${settings.maxLev}배` : ""}${dropped.length ? ` · 제외: ${dropped.join(", ")}` : ""}`,
+    { settings, start: true });
+};
 $("comboApply").onclick = () => {
   const rows = [...labPick].filter(r => labRows.includes(r));
   if (rows.length < 2) return;
@@ -1127,25 +1146,23 @@ function applyPortfolio(slots, mode, label, opts = {}) {
   if (running) { startTicker(); tick(); }
   return true;
 }
-// v3: 롤링 검증(180일, 학습60→검증30 × 4구간, 선물 시장가, 롱+숏, 1h) 결과 반영
-//  - 눌림목 반등: 분할 + 넓은 손절에서 4/4구간, 승률 89%. 익절·손절 지도에서 손절 6~8이 평평한 최고 구간 → 가운데인 6 사용
-//  - 투매 반등: 넓히면 오히려 나빠짐 → 손절 2.5 유지 (분할 매수·매도로 4/4구간)
-//  - 스퀴즈 돌파: 추세장 대비용으로 작게 유지
+// v4: 365일 롤링(학습60→검증30 × 10구간, 하락장 포함), 선물 시장가, 롱+숏, 1h, 손절 거리 기준 위험 2% · 자동 레버리지 ≤3배
+//  - 눌림목 반등 +분할 +큰 방향: 7/10구간, 수익÷낙폭 0.53 (큰 방향 없으면 −0.43) — 숏 +4.3% / 롱 −0.8%
+//  - 채널 돌파 +추세장 +러너 +분할: 6/10구간, +9.5%, 수익÷낙폭 0.80 — 롱·숏 모두 +
+//  - 투매 반등·스퀴즈 돌파는 1년 검증에서 탈락해 제외
 const PRESET = {
-  version: "v3",
+  version: "v4",
   slots: [
-    { id: "s1", name: "눌림목 반등 +분할매수·매도 ·넓은 손절", strategyId: "pullback", interval: "1h", dir: "both", weight: 45,
-      params: { bbStd: 2.5, rsiEntry: 38, stopAtr: 6, takeAtr: 4, maxHold: 48, scaleIn: 1, scaleOut: 1 }, why: "4/4구간 +, 승률 89%, 손절 6~8 구간이 꾸준히 최고" },
-    { id: "s2", name: "투매 반등 +횡보장 +분할매수·매도", strategyId: "capitulation", interval: "1h", dir: "both", weight: 35,
-      params: { reds: 3, dropAtr: 3, stopAtr: 2.5, takeAtr: 2.5, regime: 2, scaleIn: 1, scaleOut: 1 }, why: "4/4구간 +, 승률 81% (넓은 손절은 오히려 나빠서 2.5 유지)" },
-    { id: "s3", name: "스퀴즈 돌파 +봉내부 +분할매도", strategyId: "squeeze", interval: "1h", dir: "both", weight: 20,
-      params: { sqLookback: 60, volMult: 1.5, stopAtr: 1.5, trailAtr: 2, flow: 1, scaleOut: 1 }, why: "추세장 대비 · 낙폭이 작음" },
+    { id: "s1", name: "채널 돌파 +추세장 +러너 +분할", strategyId: "donchian", interval: "1h", dir: "both", weight: 60,
+      params: { chN: 20, adxMin: 20, stopAtr: 2.5, trailAtr: 8, regime: 1, runner: 1, scaleIn: 1, scaleOut: 1 }, why: "1년 6/10구간 +, +9.5%, 수익÷낙폭 0.80" },
+    { id: "s2", name: "눌림목 반등 +분할 +큰 방향", strategyId: "pullback", interval: "1h", dir: "both", weight: 40,
+      params: { bbStd: 2.5, rsiEntry: 38, stopAtr: 4, takeAtr: 6, bias: 1, scaleIn: 1, scaleOut: 1 }, why: "1년 7/10구간 +, 수익÷낙폭 0.53, 하락장에서 숏으로 수익" },
   ],
-  settings: { symbols: "BTCUSDT, ETHUSDT, SOLUSDT", leverage: 1, positionPct: 0.33, cooldownBars: 3, pollSeconds: 15 },
+  settings: { symbols: "BTCUSDT, ETHUSDT, SOLUSDT", leverage: 1, positionPct: 0.5, sizing: "risk", riskPct: 0.02, autoLev: "on", maxLev: 3, cooldownBars: 3, pollSeconds: 15 },
 };
-$("presetVer").textContent = PRESET.version + " · 분할 + 넓은 손절";
+$("presetVer").textContent = PRESET.version + " · 1년 검증 · 위험 2% · 자동 레버리지";
 $("presetList").innerHTML = PRESET.slots.map(sl => `<span class="kv" title="${esc(sl.why)}">${esc(sl.name)} · ${sl.interval} · ${sl.weight}%</span>`).join("") +
-  `<span class="muted small"> BTC·ETH·SOL · 전략마다 자금의 일부를 종목당 1/3씩</span>`;
+  `<span class="muted small"> BTC·ETH·SOL</span>`;
 $("presetBtn").onclick = () => {
   if (applyPortfolio(PRESET.slots.map(({ why, ...sl }) => ({ ...sl })), COST_MODES.futTaker, `⚡ 추천 세팅 ${PRESET.version}`, { settings: PRESET.settings, start: true })) toast("세팅 완료 · 실행 중이에요");
 };
