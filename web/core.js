@@ -428,6 +428,10 @@
     X("flow", "봉 내부 확인 (0 끔 · 1 켬)", 0), X("flowThr", "체결강도 기준 (시장가 매수 비율)", 0.55),
     X("scaleIn", "분할 매수 (0 끔 · 1 켬)", 0), X("siFrac", "1차 진입 비중", 0.5), X("siAtr", "2차 진입 간격 (ATR 배수)", 1),
     X("scaleOut", "분할 매도 (0 끔 · 1 켬)", 0), X("soFrac", "1차 익절 비중", 0.5), X("soAtr", "1차 익절 (ATR 배수)", 1.5));
+  // 보관: 여러 번의 롤링 검증에서 상위권에 들지 못한 전략 (코드는 남겨서 예전 설정은 계속 동작, 연구실에서는 제외)
+  const RETIRED = new Set(["v1", "stochrsi", "vwap", "macd", "intramom", "season", "volbreak", "ensemble"]);
+  for (const s of STRATEGIES) s.retired = RETIRED.has(s.id);
+  const ACTIVE = () => STRATEGIES.filter(s => !s.retired);
   const KIND_REGIME = { trend: 1, revert: 2 };
   function regimeOk(I, i, p) {
     if (!p.regime) return true;
@@ -612,6 +616,7 @@
       this.trades.push(t);
       return t;
     }
+    equityOne(key, px) { const pos = this.positions[key]; return pos ? this.cash + pos.qty * px : this.cash; }
     open(symbol, dir, price, amount, candleTs, when, extra) { return this.buy(symbol, price, amount, candleTs, when, extra); }
     close(symbol, price, reason, when) { return this.sell(symbol, price, reason, when); }
     fund() {}
@@ -633,6 +638,10 @@
     toJSON() {
       const { market, startingCash, cash, positions, nTrades, nWins, realizedPnl, nLiq } = this;
       return { market, startingCash, cash, positions, trades: this.trades.slice(-500), nTrades, nWins, realizedPnl, nLiq };
+    }
+    equityOne(key, px) {
+      const pos = this.positions[key];
+      return pos ? this.cash + Math.max(0, pos.margin + pos.dir * pos.qty * (px - pos.entryPrice) - pos.funding) : this.cash;
     }
     liqOf(pos) { return pos.lev > 1 ? (pos.dir > 0 ? pos.entryPrice * (1 - 1 / pos.lev + this.mmr) : pos.entryPrice * (1 + 1 / pos.lev - this.mmr)) : null; }
     open(symbol, dir, price, margin, candleTs, when, extra = {}) {
@@ -715,20 +724,32 @@
     if (p.scaleIn) pos.reserve = size - first;
     return pos;
   }
+  // 진입 신호는 익절·손절·분할 설정과 무관 → 데이터·전략·진입 설정별로 한 번만 계산해서 재사용
+  const EXIT_KEYS = new Set(["stopAtr", "takeAtr", "trailAtr", "maxHold", "minExitPct", "stopPct", "takePct",
+    "scaleIn", "siFrac", "siAtr", "scaleOut", "soFrac", "soAtr"]);
+  const entryKey = (strat, p) => strat.id + ":" + Object.keys(p).filter(k => !EXIT_KEYS.has(k)).sort().map(k => k + "=" + p[k]).join(",");
+  function entrySignals(strat, c, d, I, p) {
+    return I.memo("sig|" + entryKey(strat, p), () => {
+      const n = c.ts.length, a = new Uint8Array(n);
+      for (let i = 0; i < n; i++) { try { a[i] = entryOk(strat, c, d, I, i, p) ? 1 : 0; } catch { a[i] = 0; } }
+      return a;
+    });
+  }
   function simulate(c, strat, p, o) {
     const sym = o.symbol || "SYM", I = o.I || makeI(c), at = I.atr(14), n = c.close.length;
     const fut = o.market === "futures", longOn = !fut || o.dir !== "short", shortOn = fut && (o.dir === "short" || o.dir === "both");
     const dL = longOn ? strat.prepare(c, p, I) : null;
     const cm = shortOn ? (o.cm || mirror(c)) : null, Im = shortOn ? (o.Im || makeI(cm)) : null, dS = shortOn ? strat.prepare(cm, p, Im) : null;
+    const sigL = longOn ? entrySignals(strat, c, dL, I, p) : null, sigS = shortOn ? entrySignals(strat, cm, dS, Im, p) : null;
     const from = Math.max(o.from ?? 0, warmupOf(strat, p, tfOf(c))), to = Math.min(o.to ?? n, n);
     const b = makeBroker(o), lev = fut ? Math.max(1, o.leverage || 1) : 1, fr = fut ? (o.fundingRate ?? 0.0001) : 0;
     let entryI = null, lastExitI = -1e9;
     const equity = [];
     for (let i = from; i < to; i++) {
       if (entryI === null && i - lastExitI > o.cooldownBars && ok(at[i - 1])) {
-        const L = longOn && entryOk(strat, c, dL, I, i - 1, p), S = shortOn && entryOk(strat, cm, dS, Im, i - 1, p);
+        const L = longOn && sigL[i - 1] === 1, S = shortOn && sigS[i - 1] === 1;
         if (L !== S) {
-          const size = Math.min(b.equity({ [sym]: c.open[i] }) * o.positionPct, b.cash);
+          const size = Math.min(b.equityOne(sym, c.open[i]) * o.positionPct, b.cash);
           if (size >= (o.minOrder ?? 10)) {
             const kind = L ? kindOf(strat, c, dL, i - 1, p) : kindOf(strat, cm, dS, i - 1, p);
             openPos(b, sym, L ? 1 : -1, c.open[i], size, c.ts[i - 1], c.ts[i], { atr: at[i - 1], lev }, p, kind);
@@ -745,7 +766,7 @@
         if (r) { b.close(sym, r.price, r.reason, c.ts[i]); entryI = null; lastExitI = i; }
         else scaleOutStep(b, sym, pos, c.high[i], c.low[i], p, c.ts[i]);
       }
-      equity.push(b.equity({ [sym]: c.close[i] }));
+      equity.push(b.equityOne(sym, c.close[i]));
     }
     if (entryI !== null) { b.close(sym, c.close[to - 1], "end_of_data", c.ts[to - 1]); equity[equity.length - 1] = b.equity({}); }
     const st = stats(b.trades, equity, o.startingCash, to > from ? c.close[to - 1] / c.close[from] - 1 : NaN);
@@ -784,7 +805,7 @@
   }
 
   const Core = { ema, rma, rsi, sma, bollinger, rollMax, rollMin, atr, macd, stochRsi, adx, vwap, makeI,
-                 STRATEGIES, byId, defaults, grid, gridValues, WIDE_GRID, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
+                 STRATEGIES, ACTIVE, byId, defaults, grid, gridValues, WIDE_GRID, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, entrySignals, entryKey, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
   else root.Core = Core;
 })(typeof window !== "undefined" ? window : globalThis);
