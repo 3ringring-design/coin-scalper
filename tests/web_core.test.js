@@ -75,6 +75,58 @@ assert.strictEqual(r15.volume[1], c.volume[3] + c.volume[4] + c.volume[5]);
 const br = new Core.PaperBroker(1000, 0.001, 0);
 br.buy("X", 100, 1000, 0, 0); assert(Math.abs(br.sell("X", 100, "t", 0).pnl + 1.999) < 1e-9);
 
+// 6) 선물: 숏 손익, 레버리지, 강제청산, 펀딩
+{
+  const fb = new Core.FuturesBroker(1000, 0, 0);
+  fb.open("X", -1, 100, 100, 0, 0, { lev: 2, atr: 1 });            // 숏 증거금 100 × 2배
+  assert(Math.abs(fb.equity({ X: 90 }) - 1020) < 1e-9);             // 10% 하락 → +20
+  const t = fb.close("X", 90, "take_profit", 0);
+  assert(Math.abs(t.pnl - 20) < 1e-9 && Math.abs(t.grossPct - 0.1) < 1e-12 && Math.abs(fb.cash - 1020) < 1e-9);
+
+  const lb = new Core.FuturesBroker(1000, 0.0005, 0, 0.005);
+  const pos = lb.open("X", 1, 100, 100, 0, 0, { lev: 10, atr: 10 });
+  assert(Math.abs(pos.liq - 90.5) < 1e-9);                           // 100 × (1 − 0.1 + 0.005)
+  const pl = { stopAtr: 2, takeAtr: 0, trailAtr: 0, maxHold: 99, minExitPct: 0 };
+  assert.strictEqual(Core.checkExit(pos, 101, 90, 95, 0, false, pl).reason, "liquidation");   // 손절(80)보다 청산가가 먼저
+  const tight = { ...pl, stopAtr: 0.3 };                             // 손절 97 → 청산가보다 먼저
+  assert.strictEqual(Core.checkExit({ ...pos }, 101, 90, 95, 0, false, tight).reason, "stop_loss");
+  const lt = lb.close("X", 90.5, "liquidation", 0);
+  assert(Math.abs(lt.pnl + 100 + 0.5) < 1e-9 && lb.nLiq === 1);      // 증거금 + 진입 수수료 손실
+
+  const sp = { stopAtr: 2, takeAtr: 3, trailAtr: 2, maxHold: 99, minExitPct: 0.005 };
+  const sh = { dir: -1, entryPrice: 100, atr: 1, lowest: 100 };
+  assert.strictEqual(Core.checkExit(sh, 102.5, 99, 100, 0, false, sp).reason, "stop_loss");
+  const sh2 = { dir: -1, entryPrice: 100, atr: 1, lowest: 100 };
+  assert.strictEqual(Core.checkExit(sh2, 100.5, 97, 98, 0, false, sp).reason, "take_profit");
+  const sh3 = { dir: -1, entryPrice: 100, atr: 1, lowest: 100 };
+  assert.strictEqual(Core.checkExit(sh3, 100, 98.5, 99, 0, false, sp), null);                 // 최저 98.5 기록
+  assert.strictEqual(Core.checkExit(sh3, 100.6, 99, 100, 1, false, sp).reason, "trail_stop"); // 98.5 + 2 = 100.5
+
+  const fu = new Core.FuturesBroker(1000, 0, 0);
+  fu.open("X", 1, 100, 100, 0, 0, { lev: 1 }); fu.fund("X", 100, 0.0001);
+  assert(Math.abs(fu.close("X", 100, "t", 0).pnl + 0.01) < 1e-12);  // 롱은 펀딩비를 냄
+}
+{
+  const c = synthetic(9000, 21), cm = Core.mirror(c), I = Core.makeI(c), Im = Core.makeI(cm);
+  const F = { ...O, market: "futures", feeRate: 0.0005, slippageBps: 3, I, cm, Im };
+  for (const s of Core.STRATEGIES) {
+    const p = Core.defaults(s);
+    const L = Core.simulate(c, s, p, { ...F, dir: "long" }), S = Core.simulate(c, s, p, { ...F, dir: "short" }), B = Core.simulate(c, s, p, { ...F, dir: "both" });
+    assert(L.trades.every(t => t.dir === 1) && S.trades.every(t => t.dir === -1), `${s.id} 방향`);
+    assert(B.equity.every(Number.isFinite) && S.equity.every(Number.isFinite), `${s.id} NaN`);
+    const l10 = Core.simulate(c, s, p, { ...F, dir: "both", leverage: 10 });
+    assert(l10.equity.every(v => v >= 0), `${s.id} 자산 음수`);
+  }
+  // 숏 신호 = 뒤집힌 차트의 롱 신호
+  const v = Core.byId("v1"), sOnly = Core.simulate(c, v, Core.defaults(v), { ...F, dir: "short" });
+  assert(sOnly.trades.length > 0, "숏 거래 없음");
+  // 레버리지를 올리면 낙폭이 커져야 함
+  const pb = Core.byId("pullback"), pp = Core.defaults(pb);
+  const d1 = Core.simulate(c, pb, pp, { ...F, dir: "both", leverage: 1 }).stats.maxDrawdown,
+        d5 = Core.simulate(c, pb, pp, { ...F, dir: "both", leverage: 5 }).stats.maxDrawdown;
+  assert(d5 < d1, "레버리지 낙폭");
+}
+
 // (선택) 파이썬 결과와 비교
 if (process.argv[2]) {
   const fx = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
