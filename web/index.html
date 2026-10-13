@@ -1062,20 +1062,23 @@ function applyPortfolio(slots, mode, label, opts = {}) {
   if (running) { startTicker(); tick(); }
   return true;
 }
-// v2: 연구실 롤링 검증(180일, 학습60→검증30 × 4구간, 선물 시장가, 롱+숏, 1h)에서 분할 매매를 켠 버전이 일관되게 개선된 조합
+// v3: 롤링 검증(180일, 학습60→검증30 × 4구간, 선물 시장가, 롱+숏, 1h) 결과 반영
+//  - 눌림목 반등: 분할 + 넓은 손절에서 4/4구간, 승률 89%. 익절·손절 지도에서 손절 6~8이 평평한 최고 구간 → 가운데인 6 사용
+//  - 투매 반등: 넓히면 오히려 나빠짐 → 손절 2.5 유지 (분할 매수·매도로 4/4구간)
+//  - 스퀴즈 돌파: 추세장 대비용으로 작게 유지
 const PRESET = {
-  version: "v2",
+  version: "v3",
   slots: [
-    { id: "s1", name: "투매 반등 +횡보장 +분할매수·매도", strategyId: "capitulation", interval: "1h", dir: "both", weight: 40,
-      params: { reds: 3, dropAtr: 3, stopAtr: 2.5, takeAtr: 2.5, regime: 2, scaleIn: 1, scaleOut: 1 }, why: "4/4구간 +, 승률 81%, 낙폭 −8%" },
-    { id: "s2", name: "눌림목 반등 +분할매도", strategyId: "pullback", interval: "1h", dir: "both", weight: 35,
-      params: { bbStd: 2.5, rsiEntry: 38, stopAtr: 4, takeAtr: 2, scaleOut: 1 }, why: "4/4구간 +, 낙폭 −5.6%" },
-    { id: "s3", name: "스퀴즈 돌파 +봉내부 +분할매도", strategyId: "squeeze", interval: "1h", dir: "both", weight: 25,
-      params: { sqLookback: 60, volMult: 1.5, stopAtr: 1.5, trailAtr: 2, flow: 1, scaleOut: 1 }, why: "추세장 담당 · 3/4구간 +, 낙폭 −1.9%" },
+    { id: "s1", name: "눌림목 반등 +분할매수·매도 ·넓은 손절", strategyId: "pullback", interval: "1h", dir: "both", weight: 45,
+      params: { bbStd: 2.5, rsiEntry: 38, stopAtr: 6, takeAtr: 4, maxHold: 48, scaleIn: 1, scaleOut: 1 }, why: "4/4구간 +, 승률 89%, 손절 6~8 구간이 꾸준히 최고" },
+    { id: "s2", name: "투매 반등 +횡보장 +분할매수·매도", strategyId: "capitulation", interval: "1h", dir: "both", weight: 35,
+      params: { reds: 3, dropAtr: 3, stopAtr: 2.5, takeAtr: 2.5, regime: 2, scaleIn: 1, scaleOut: 1 }, why: "4/4구간 +, 승률 81% (넓은 손절은 오히려 나빠서 2.5 유지)" },
+    { id: "s3", name: "스퀴즈 돌파 +봉내부 +분할매도", strategyId: "squeeze", interval: "1h", dir: "both", weight: 20,
+      params: { sqLookback: 60, volMult: 1.5, stopAtr: 1.5, trailAtr: 2, flow: 1, scaleOut: 1 }, why: "추세장 대비 · 낙폭이 작음" },
   ],
   settings: { symbols: "BTCUSDT, ETHUSDT, SOLUSDT", leverage: 1, positionPct: 0.33, cooldownBars: 3, pollSeconds: 15 },
 };
-$("presetVer").textContent = PRESET.version + " · 분할 매매 적용";
+$("presetVer").textContent = PRESET.version + " · 분할 + 넓은 손절";
 $("presetList").innerHTML = PRESET.slots.map(sl => `<span class="kv" title="${esc(sl.why)}">${esc(sl.name)} · ${sl.interval} · ${sl.weight}%</span>`).join("") +
   `<span class="muted small"> BTC·ETH·SOL · 전략마다 자금의 일부를 종목당 1/3씩</span>`;
 $("presetBtn").onclick = () => {
