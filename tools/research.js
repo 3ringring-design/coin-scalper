@@ -81,22 +81,22 @@ const day = t => new Date(t).toISOString().slice(0, 10);
   for (const [n, ov] of [["물타기 끔", { scaleIn: 0 }], ["물타기 (v4)", {}], ["물타기 1차 33%", { siFrac: 0.33 }]])
     console.log(fmt(`눌림목 롱+숏 · ${n}`, evalR(run([{ id: "pullback", p: { ...PB, ...ov }, dir: "both" }]))));
 
-  // 3) 위험 부담 × 계좌 위험 조절
-  const bestP = pyrRes.slice().sort((a, b) => b.e.minHalf - a.e.minHalf)[0];
-  console.log(`\n== 3. 위험 부담 × 위험 조절 (기준: ${bestP.n}) — 앞·뒤 3년 중 나쁜 쪽 기준 정렬 ==`);
+  // 3) 위험 부담 × 낙폭 브레이크 × 불타기 × 변동성 조절 → 낙폭 한도별 최고 수익
+  console.log("\n== 3. 낙폭 한도별 최고 세팅 (앞·뒤 3년 둘 다 +인 것만) ==");
+  const BRAKES = [["", {}], ["브레이크10%×½", { ddCut: 0.1, ddMult: 0.5 }], ["브레이크15%×½", { ddCut: 0.15, ddMult: 0.5 }], ["브레이크20%×½", { ddCut: 0.2, ddMult: 0.5 }],
+    ["브레이크10%×¼", { ddCut: 0.1, ddMult: 0.25 }], ["2단 10%×½·20%×½", { ddCut: 0.1, ddMult: 0.5, ddCut2: 0.2, ddMult2: 0.5 }], ["2단 15%×½·25%×½", { ddCut: 0.15, ddMult: 0.5, ddCut2: 0.25, ddMult2: 0.5 }]];
+  const PYR = [["분할 v5", {}], ["불타기+100%", { siBoost: 1 }], ["분할 끔", { scaleIn: 0, scaleOut: 0 }]];
   const rows = [];
-  for (const dir of ["long", "both"]) for (const risk of [0.01, 0.015, 0.02, 0.03, 0.04]) for (const heat of [0, 0.02, 0.03, 0.045]) for (const vt of [0, 1]) for (const dd of [0, 0.15]) {
-    if (heat && heat < risk) continue;
-    const o = { riskPct: risk, heatMax: heat || undefined, volTarget: !!vt, ddCut: dd || undefined, maxLev: risk >= 0.03 ? 5 : 3 };
-    const label = `${dir === "long" ? "롱" : "롱+숏"} 위험${risk * 100}%${heat ? ` 동시한도${heat * 100}%` : ""}${vt ? " 변동성조절" : ""}${dd ? " 낙폭브레이크" : ""}`;
-    rows.push({ label, e: evalR(run([{ id: "donchian", p: { ...CH, ...bestP.ov }, dir }], o)) });
+  for (const [pn, pov] of PYR) for (const risk of [0.01, 0.015, 0.02, 0.03, 0.04]) for (const [bn, bo] of BRAKES) for (const vt of [0, 1]) {
+    const o = { riskPct: risk, volTarget: !!vt, maxLev: risk >= 0.03 ? 5 : 3, ...bo };
+    rows.push({ label: `롱 ${pn} 위험${risk * 100}% ${bn}${vt ? " 변동성조절" : ""}`, risk, e: evalR(run([{ id: "donchian", p: { ...CH, ...pov }, dir: "long" }], o)) });
   }
-  rows.sort((a, b) => b.e.minHalf - a.e.minHalf);
-  for (const r of rows.slice(0, 25)) console.log(fmt(r.label, r.e));
-  console.log("\n-- 낙폭 30% 이내 중 상위 --");
-  for (const r of rows.filter(r => r.e.all.mdd > -0.3).slice(0, 12)) console.log(fmt(r.label, r.e));
-  console.log("\n-- 낙폭 20% 이내 중 상위 --");
-  for (const r of rows.filter(r => r.e.all.mdd > -0.2).slice(0, 8)) console.log(fmt(r.label, r.e));
-  console.log("\n-- 위험만 키운 경우 (조절 없음) --");
-  for (const r of rows.filter(r => !/동시|변동|브레이크/.test(r.label))) console.log(fmt(r.label, r.e));
+  const good = rows.filter(r => r.e.h1.cagr > 0 && r.e.h2.cagr > 0);
+  for (const lim of [0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6]) {
+    const top = good.filter(r => r.e.all.mdd > -lim).sort((a, b) => b.e.all.cagr - a.e.all.cagr).slice(0, 3);
+    console.log(`\n-- 최대 낙폭 ${lim * 100}% 이내 --`);
+    for (const r of top) console.log(fmt(r.label, r.e));
+  }
+  console.log("\n-- 브레이크 효과 (분할 v5, 변동성조절 없음) --");
+  for (const r of rows.filter(r => r.label.startsWith("롱 분할 v5") && !r.label.includes("변동성"))) console.log(fmt(r.label, r.e));
 })().catch(e => { console.error(e); process.exit(1); });

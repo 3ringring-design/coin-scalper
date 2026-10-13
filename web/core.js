@@ -856,6 +856,7 @@
     let r = base;
     if (o.volTarget && ok(volNow) && ok(volAvg) && volNow > 0) r *= Math.min(o.vtMax ?? 1.5, Math.max(o.vtMin ?? 0.5, volAvg / volNow));
     if (o.ddCut && peak > 0 && eq / peak - 1 < -o.ddCut) r *= o.ddMult ?? 0.5;
+    if (o.ddCut2 && peak > 0 && eq / peak - 1 < -o.ddCut2) r *= o.ddMult2 ?? 0.5;     // 2단 브레이크
     if (o.heatMax) {
       let heat = 0;
       for (const ps of Object.values(positions)) if (!ps.be && ps.riskAmt) heat += ps.riskAmt;
