@@ -307,6 +307,33 @@ br.buy("X", 100, 1000, 0, 0); assert(Math.abs(br.sell("X", 100, "t", 0).pnl + 1.
   near(tp.exitPrice, 110, "메이커 익절가"); near(fb.cash, 1000 + tp.pnl, "현금 일치");
 }
 
+// 12) 켈리 동적 위험 · 자동 레버리지
+{
+  const near = (a, b, m) => assert(Math.abs(a - b) < 1e-9, `${m}: ${a} vs ${b}`);
+  const K = { kellyFrac: 0.25, kellyN: 30, riskMin: 0.005, riskMax: 0.03 };
+  const mk = (w, l, rw = 1, rl = -1) => [...Array(w).fill({ rmult: rw }), ...Array(l).fill({ rmult: rl })];
+  near(Core.kellyRisk(mk(3, 3), K, 0.01).risk, 0.01, "거래 10개 미만 → 기본 위험");
+  near(Core.kellyRisk(mk(12, 8, 1, -0.5), K, 0.01).risk, 0.03, "W 0.6, R 2 → f 0.4 → 1/4 = 10% → 최대 3%");
+  near(Core.kellyRisk(mk(11, 9), K, 0.01).risk, 0.25 * (0.55 - 0.45 / 1), "W 0.55, R 1 → f 0.1 → 1/4 켈리 2.5%");
+  near(Core.kellyRisk(mk(4, 6), K, 0.01).risk, 0.005, "우위 없음 → 최소 위험");
+  // 자동 레버리지: 손절 1%에 위험 2% → 필요 포지션 2,000, 증거금 상한 330 → 3배 상한
+  const pl = Core.sizePlan(1000, 1000, 100, 0.5, { stopAtr: 2 }, { positionPct: 0.33, sizing: "risk", riskPct: 0.02, autoLev: true, maxLev: 3 }, 1, []);
+  near(pl.lev, 3, "자동 레버리지 상한"); near(pl.amount, 330, "증거금 상한"); near(pl.riskAmt, 9.9, "실제 위험 금액");
+  const pl2 = Core.sizePlan(1000, 1000, 100, 2, { stopAtr: 2 }, { positionPct: 0.33, sizing: "risk", riskPct: 0.02, autoLev: true, maxLev: 5 }, 1, []);
+  near(pl2.lev, 2, "필요한 만큼만 (500 ÷ 330 → 2배)"); near(pl2.amount * pl2.lev, 500, "포지션 500");
+  // 시뮬레이션: 거래마다 위험 대비 배수(R) 기록, 켈리를 켜도 자산이 정상
+  const c = (() => { let sd = 99; const r = () => (sd = (sd * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const x = { ts: [], open: [], high: [], low: [], close: [], volume: [] }; let px = 100;
+    for (let i = 0; i < 6000; i++) { const o = px; px *= Math.exp(0.012 * (r() + r() + r() - 1.5) * 1.15);
+      x.ts.push(i * 36e5); x.open.push(o); x.close.push(px); x.high.push(Math.max(o, px) * (1 + r() * 0.004)); x.low.push(Math.min(o, px) * (1 - r() * 0.004)); x.volume.push(1); }
+    return x; })();
+  const s = Core.byId("pullback"), p0 = { ...Core.defaults(s), stopAtr: 2, kelly: 1 };
+  const r = Core.simulate(c, s, p0, { ...O, market: "futures", feeRate: 0.0005, slippageBps: 3, dir: "both", sizing: "risk", riskPct: 0.01, autoLev: true, maxLev: 3 });
+  assert(r.trades.length > 10 && r.trades.every(t => Number.isFinite(t.rmult)), "R 배수 기록");
+  assert(r.trades.every(t => t.lev >= 1 && t.lev <= 3), "레버리지 상한");
+  assert(r.equity.every(v => Number.isFinite(v) && v >= 0));
+}
+
 // (선택) 파이썬 결과와 비교
 if (process.argv[2]) {
   const fx = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));

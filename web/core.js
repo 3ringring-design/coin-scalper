@@ -430,7 +430,9 @@
     X("scaleOut", "분할 매도 (0 끔 · 1 켬)", 0), X("soFrac", "1차 익절 비중", 0.5), X("soAtr", "1차 익절 (ATR 배수)", 1.5),
     X("bias", "큰 방향 필터 (0 끔 · 1 켬: 추세선 위면 롱만, 아래면 숏만)", 0), X("biasDays", "큰 방향 추세선 (일)", 30),
     X("runner", "러너 (0 끔 · 1 켬: 분할 익절 후 남은 물량은 추적손절로만)", 0), X("runAtr", "러너 추적손절 (ATR 배수)", 3),
-    X("limitEntry", "지정가 진입 (0 끔 · 1 켬)", 0), X("limOff", "지정가 간격 (ATR 배수, 더 좋은 가격 쪽)", 0.25), X("limBars", "지정가 대기 (봉)", 3));
+    X("limitEntry", "지정가 진입 (0 끔 · 1 켬)", 0), X("limOff", "지정가 간격 (ATR 배수, 더 좋은 가격 쪽)", 0.25), X("limBars", "지정가 대기 (봉)", 3),
+    X("kelly", "켈리 동적 위험 (0 끔 · 1 켬)", 0), X("kellyFrac", "켈리 비율 (0.25 = 1/4 켈리)", 0.25), X("kellyN", "켈리 계산 거래 수 (최근)", 30),
+    X("riskMin", "동적 위험 최소 (0.005 = 0.5%)", 0.005), X("riskMax", "동적 위험 최대 (0.03 = 3%)", 0.03));
   // 보관: 여러 번의 롤링 검증에서 상위권에 들지 못한 전략 (코드는 남겨서 예전 설정은 계속 동작, 연구실에서는 제외)
   const RETIRED = new Set(["v1", "stochrsi", "vwap", "macd", "intramom", "season", "volbreak", "ensemble"]);
   for (const s of STRATEGIES) s.retired = RETIRED.has(s.id);
@@ -626,7 +628,7 @@
       this.nTrades++; if (pnl > 0) this.nWins++; this.realizedPnl += pnl;
       const t = { symbol, dir: 1, lev: 1, entryTime: pos.entryTime, exitTime: when, entryPrice: pos.entryPrice, exitPrice: fill,
                   qty: pos.qty, cost: base, proceeds, pnl, pnlPct: pnl / base, reason,
-                  grossPct: pos.rawEntry ? exitAvg(pos, price) / pos.rawEntry - 1 : NaN, sym: pos.symbol, slotName: pos.slotName,
+                  grossPct: pos.rawEntry ? exitAvg(pos, price) / pos.rawEntry - 1 : NaN, sym: pos.symbol, slotName: pos.slotName, rmult: pos.riskAmt ? pnl / pos.riskAmt : undefined,
                   scaled: (pos.added ? "+" : "") + (pos.partialDone ? "½" : "") };
       this.trades.push(t);
       return t;
@@ -712,7 +714,7 @@
       this.nTrades++; if (pnl > 0) this.nWins++; this.realizedPnl += pnl;
       const t = { symbol, dir: pos.dir, lev: pos.lev, entryTime: pos.entryTime, exitTime: when, entryPrice: pos.entryPrice, exitPrice: fill,
                   qty: pos.qty, cost: base, pnl, pnlPct: pnl / base, reason, funding: pos.funding,
-                  grossPct: pos.dir * (exitAvg(pos, price) / pos.rawEntry - 1), sym: pos.symbol, slotName: pos.slotName,
+                  grossPct: pos.dir * (exitAvg(pos, price) / pos.rawEntry - 1), sym: pos.symbol, slotName: pos.slotName, rmult: pos.riskAmt ? pnl / pos.riskAmt : undefined,
                   scaled: (pos.added ? "+" : "") + (pos.partialDone ? "½" : "") };
       this.trades.push(t);
       return t;
@@ -735,12 +737,34 @@
   // o.market: "spot" | "futures", o.dir: "long" | "short" | "both", o.leverage, o.fundingRate(8시간당)
   const FUNDING_MS = 8 * 3600e3;
   // 포지션 크기: 고정(자산 × 비중) 또는 위험 기준(손절에 걸리면 자산의 riskPct만 잃도록 역산, 고정 비중이 상한)
-  function sizeFor(equity, cash, price, atr, p, o, lev, share = 1) {
-    const cap = Math.min(equity * o.positionPct * share, cash);
-    if (o.sizing !== "risk") return cap;
-    const stopFrac = p.stopPct != null ? p.stopPct : (p.stopAtr * atr) / price;
-    const notional = (equity * o.riskPct * share) / Math.max(stopFrac, 1e-4);
-    return Math.min(notional / Math.max(1, lev), cap);
+  // 켈리 기준: 최근 거래의 승률 W와 평균 이익/평균 손실 비율 R(손절 위험 대비 배수)로 f* = W − (1−W)/R.
+  // 추정 오차가 크므로 kellyFrac(기본 1/4)만 쓰고 riskMin~riskMax로 제한. 거래가 10개 미만이면 기본 위험 사용.
+  function kellyRisk(hist, p, base) {
+    const h = (hist || []).filter(t => t.reason !== "end_of_data").slice(-(p.kellyN || 30));
+    if (h.length < 10) return { risk: base, f: null, n: h.length };
+    const r = h.map(t => ok(t.rmult) ? t.rmult : t.pnlPct), wins = r.filter(x => x > 0), losses = r.filter(x => x <= 0);
+    const W = wins.length / r.length;
+    if (!losses.length) return { risk: p.riskMax, f: Infinity, n: h.length, W };
+    const R = (wins.reduce((a, x) => a + x, 0) / Math.max(1, wins.length)) / (-losses.reduce((a, x) => a + x, 0) / losses.length || 1e-9);
+    const f = W - (1 - W) / Math.max(R, 1e-9);
+    return { risk: Math.min(p.riskMax, Math.max(p.riskMin, p.kellyFrac * f)), f, n: h.length, W, R };
+  }
+  // 포지션 크기 계획: 고정(자산 × 비중) / 위험 기준(손절 시 자산의 risk%) / 켈리(위험%를 최근 성적으로 조절).
+  // autoLev면 필요한 포지션을 증거금 상한 안에 담을 수 있는 최소 레버리지(maxLev 이하)를 자동 선택.
+  function sizePlan(equity, cash, price, atr, p, o, lev, hist, share = 1) {
+    const capMargin = Math.min(equity * o.positionPct * share, cash);
+    if (o.sizing !== "risk" && !p.kelly) return { amount: capMargin, lev, risk: null };
+    const k = p.kelly ? kellyRisk(hist, p, o.riskPct ?? 0.01) : null;
+    const risk = (k ? k.risk : o.riskPct ?? 0.01) * share;
+    const stopFrac = Math.max(p.stopPct != null ? p.stopPct : (p.stopAtr * atr) / price, 1e-4);
+    const notional = (equity * risk) / stopFrac;
+    let L = Math.max(1, lev);
+    if (o.autoLev) L = Math.min(Math.max(1, Math.ceil(notional / Math.max(capMargin, 1e-9) - 1e-9)), Math.max(1, o.maxLev || 3));
+    const amount = Math.min(notional / L, capMargin);
+    return { amount, lev: L, risk, riskAmt: amount * L * stopFrac, kelly: k };
+  }
+  function sizeFor(equity, cash, price, atr, p, o, lev, share = 1, hist) {
+    return sizePlan(equity, cash, price, atr, p, o, lev, hist, share).amount;
   }
   function openPos(b, key, side, price, size, candleTs, when, extra, p, kind) {
     const first = p.scaleIn ? size * p.siFrac : size;
@@ -775,8 +799,8 @@
       if (pend && entryI === null) {
         const lv = pend.side > 0 ? Math.min(pend.lvl, c.open[i]) : Math.max(pend.lvl, c.open[i]);
         if (pend.side > 0 ? c.low[i] <= pend.lvl : c.high[i] >= pend.lvl) {
-          const size = sizeFor(b.equityOne(sym, lv), b.cash, lv, pend.atr, p, o, lev);
-          if (size >= (o.minOrder ?? 10)) { openPos(b, sym, pend.side, lv, size, pend.ts, c.ts[i], { atr: pend.atr, lev, maker: true }, p, pend.kind); entryI = i; }
+          const pl = sizePlan(b.equityOne(sym, lv), b.cash, lv, pend.atr, p, o, lev, o.kellySeed ? o.kellySeed.concat(b.trades) : b.trades);
+          if (pl.amount >= (o.minOrder ?? 10)) { openPos(b, sym, pend.side, lv, pl.amount, pend.ts, c.ts[i], { atr: pend.atr, lev: pl.lev, maker: true, riskAmt: pl.riskAmt }, p, pend.kind); entryI = i; }
           pend = null;
         } else if (i >= pend.expire) pend = null;
       }
@@ -788,9 +812,9 @@
             pend = { side, lvl: c.close[i - 1] - side * p.limOff * at[i - 1], expire: i - 1 + p.limBars, atr: at[i - 1], ts: c.ts[i - 1], kind };
             i--; continue;                                   // 같은 봉에서 바로 체결 여부 확인
           }
-          const size = sizeFor(b.equityOne(sym, c.open[i]), b.cash, c.open[i], at[i - 1], p, o, lev);
-          if (size >= (o.minOrder ?? 10)) {
-            openPos(b, sym, side, c.open[i], size, c.ts[i - 1], c.ts[i], { atr: at[i - 1], lev }, p, kind);
+          const pl = sizePlan(b.equityOne(sym, c.open[i]), b.cash, c.open[i], at[i - 1], p, o, lev, o.kellySeed ? o.kellySeed.concat(b.trades) : b.trades);
+          if (pl.amount >= (o.minOrder ?? 10)) {
+            openPos(b, sym, side, c.open[i], pl.amount, c.ts[i - 1], c.ts[i], { atr: at[i - 1], lev: pl.lev, riskAmt: pl.riskAmt }, p, kind);
             entryI = i;
           }
         }
@@ -844,7 +868,7 @@
   }
 
   const Core = { ema, rma, rsi, sma, bollinger, rollMax, rollMin, atr, macd, stochRsi, adx, vwap, makeI,
-                 STRATEGIES, ACTIVE, byId, defaults, grid, gridValues, WIDE_GRID, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, sizeFor, biasOk, entrySignals, entryKey, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
+                 STRATEGIES, ACTIVE, byId, defaults, grid, gridValues, WIDE_GRID, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, sizeFor, sizePlan, kellyRisk, biasOk, entrySignals, entryKey, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
   else root.Core = Core;
 })(typeof window !== "undefined" ? window : globalThis);
