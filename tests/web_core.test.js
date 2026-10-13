@@ -251,6 +251,17 @@ br.buy("X", 100, 1000, 0, 0); assert(Math.abs(br.sell("X", 100, "t", 0).pnl + 1.
   }
 }
 
+// 10) 넓은 익절·손절 탐색: 비교값만 바뀌고, 원래 비교값이 없는 항목은 그대로
+{
+  const s = Core.byId("capitulation"), g = Core.grid(s, { regime: 2 }, Core.WIDE_GRID);
+  assert.deepStrictEqual([...new Set(g.map(p => p.stopAtr))], [2.5, 4, 6, 8]);
+  assert.deepStrictEqual([...new Set(g.map(p => p.takeAtr))], [2.5, 4, 6, 8]);
+  assert.deepStrictEqual([...new Set(g.map(p => p.maxHold))], [36, 108]);
+  assert(g.every(p => p.regime === 2 && p.trailAtr === 0));                // 추적손절은 원래 비교값이 없어서 그대로
+  const v1 = Core.byId("v1");
+  assert.strictEqual(Core.grid(v1, null, Core.WIDE_GRID).length, 2);      // v1은 보유 시간만 (고정 % 손절)
+}
+
 // (선택) 파이썬 결과와 비교
 if (process.argv[2]) {
   const fx = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));

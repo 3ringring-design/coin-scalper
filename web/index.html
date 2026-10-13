@@ -120,7 +120,7 @@ canvas { display: block; width: 100%; height: 240px; }
   <section class="tab on" id="tab-live">
     <div class="strat-bar" style="border-color:#5a4515">
       <div style="flex:1;min-width:240px">
-        <b>⚡ 추천 포트폴리오로 자동 세팅</b>
+        <b>⚡ 추천 포트폴리오로 자동 세팅 <span class="badge paper" id="presetVer"></span></b>
         <div class="note">연구실 롤링 검증에서 가장 꾸준했던 3개 전략을 자금을 나눠 같이 돌려요 · 선물 모의 · 롱+숏 · 1배 · 계좌를 새로 시작하고 바로 실행</div>
         <div id="presetList" style="margin-top:6px"></div>
       </div>
@@ -194,6 +194,7 @@ canvas { display: block; width: 100%; height: 240px; }
             <option value="none">안 함</option>
             <option value="all">기본 · 분할 매수 · 분할 매도 · 둘 다 (4가지)</option>
           </select>
+          <label class="chip" title="손절·익절·추적손절 비교값을 2.5~8 ATR로, 최대 보유 시간을 3배까지 넓혀서 비교해요"><input type="checkbox" id="labWide"> 넓은 익절·손절 탐색 (2.5~8 ATR)</label>
           <span class="muted small">시장 상태: 추세형은 추세장, 되돌림형은 횡보장에서만 · 봉 내부: 체결강도와 마감 위치로 진입 확인 · 분할: 총 투자금·최초 손절선은 그대로</span></div>
         <div class="row" style="margin-bottom:0">
           <button class="btn primary" id="labBtn">연구 시작</button>
@@ -772,6 +773,7 @@ function renderLabControls() {
   $("labTfs").innerHTML = TFS.map(t => `<label class="chip"><input type="checkbox" value="${t}" ${tfs.includes(t) ? "checked" : ""}>${t}</label>`).join("");
   { const fv = store.get("cs_lab_filter", "all"); $("labFilter").value = fv === true ? "regime" : fv === false ? "none" : fv; }
   $("labSplit").value = store.get("cs_lab_split", "none");
+  $("labWide").checked = store.get("cs_lab_wide", false);
   $("labStrats").innerHTML = Core.STRATEGIES.map(s => `<label class="chip" title="${esc(s.desc)}"><input type="checkbox" value="${s.id}" ${sel.includes(s.id) ? "checked" : ""}>${s.name} <span class="muted small">${Core.grid(s).length}</span></label>`).join("");
 }
 function verdict(r) {
@@ -811,6 +813,7 @@ async function runLab() {
   store.set("cs_lab_tfs", tfs); store.set("cs_lab_strats", ids); store.set("cs_lab_mode", { mode, days, train: trainD, test: testD });
   const filterMode = $("labFilter").value; store.set("cs_lab_filter", filterMode);
   const splitMode = $("labSplit").value; store.set("cs_lab_split", splitMode);
+  const gx = $("labWide").checked ? Core.WIDE_GRID : null; store.set("cs_lab_wide", !!gx);
   const SPLITS = splitMode === "all" ? [["", null], [" +분할매수", { scaleIn: 1 }], [" +분할매도", { scaleOut: 1 }], [" +분할매수·매도", { scaleIn: 1, scaleOut: 1 }]] : [["", null]];
   const costKey = $("labCost").value, cmode = COST_MODES[costKey], dir = cmode.market === "spot" ? "long" : $("labDir").value;
   store.set("cs_lab_cost", costKey); store.set("cs_lab_dir", dir);
@@ -829,7 +832,7 @@ async function runLab() {
   labRows = []; labPick = new Set();
   try {
     // 1) 5분봉 받기 (지표 워밍업용 여유 포함) → 15m·1h는 합쳐서 만듦
-    const maxWarmMs = Math.max(...tfs.flatMap(tf => variants.flatMap(v => Core.grid(v.s, v.ov).map(p => Core.warmupOf(v.s, p, TF_MS[tf]) * TF_MS[tf]))));
+    const maxWarmMs = Math.max(...tfs.flatMap(tf => variants.flatMap(v => Core.grid(v.s, v.ov, gx).map(p => Core.warmupOf(v.s, p, TF_MS[tf]) * TF_MS[tf]))));
     const extraDays = Math.ceil(maxWarmMs / DAY) + 1;
     const raw = {};
     for (const sym of syms) {
@@ -850,7 +853,7 @@ async function runLab() {
       });
       return { c, I: Core.makeI(c), cm: cmr, Im: Core.makeI(cmr), idx };
     });
-    const total = tfs.length * variants.reduce((n, v) => n + Core.grid(v.s, v.ov).length, 0) * syms.length * plan.length;
+    const total = tfs.length * variants.reduce((n, v) => n + Core.grid(v.s, v.ov, gx).length, 0) * syms.length * plan.length;
     let done = 0, lastYield = Date.now();
     const opt = { ...brokerOpts(), positionPct: 1, market: cmode.market, feeRate: cmode.fee, slippageBps: cmode.slip, fundingRate: cmode.funding, dir, leverage: 1 };
     const minTrades = Math.max(5, syms.length * 3);
@@ -860,7 +863,7 @@ async function runLab() {
       const ds = sets[tf], folds = [];
       for (let k = 0; k < plan.length; k++) {
         let best = null;
-        for (const p of Core.grid(s, ov)) {
+        for (const p of Core.grid(s, ov, gx)) {
           const res = ds.map((d, j) => Core.simulate(d.c, s, p, { ...opt, I: d.I, cm: d.cm, Im: d.Im, symbol: syms[j], from: d.idx[k].a, to: d.idx[k].b }).stats);
           const avg = res.reduce((a, r) => a + r.totalReturn, 0) / res.length, trades = res.reduce((a, r) => a + r.trades, 0);
           const score = trades >= minTrades ? avg : avg - 1;       // 거래가 너무 적은 조합은 후순위
@@ -875,7 +878,7 @@ async function runLab() {
           train: { avg: best.avg, trades: best.trades, per: best.per },
           test: { avg: st.reduce((a, r) => a + r.totalReturn, 0) / st.length, trades: st.reduce((a, r) => a + r.trades, 0), per, edge: gN ? gS / gN : NaN } });
       }
-      const row = { s, name, tf, p: folds[folds.length - 1].p, folds, costKey, dir, opt, rt, syms, sets: ds, mode };
+      const row = { s, name: name + (gx ? " ·넓게" : ""), tf, p: folds[folds.length - 1].p, folds, costKey, dir, opt, rt, syms, sets: ds, mode, gx };
       const chained = syms.map((_, j) => chainFolds(row, j));
       const all = chained.flatMap(x => x.trades), g = all.map(t => t.grossPct).filter(isN);
       const wins = all.filter(t => t.pnl > 0).reduce((a, t) => a + t.pnl, 0), losses = -all.filter(t => t.pnl <= 0).reduce((a, t) => a + t.pnl, 0);
@@ -897,7 +900,7 @@ async function runLab() {
     labMeta = { mode, days, trainD, testD, nFolds: plan.length, span: `${fmtT(first.ts[0])} ~ ${fmtT(first.ts[first.ts.length - 1])}`, costKey, dir };
     const modeTxt = mode === "rolling" ? `롤링 ${trainD}→${testD}일 × ${plan.length}구간` : "70/30";
     $("labInfo").textContent = `완료 — ${labRows.length}개 비교 · 통과 ${passed}개 · 1위 ${top.name} ${top.tf} (검증 ${fmtPct(top.test.avg)}${top.folds.length > 1 ? `, ${top.foldPos}/${top.folds.length}구간 +` : ""})`;
-    log(`연구실 ${days}일 ${modeTxt} · ${cmode.label.split(" — ")[0]} · ${DIR_KO[dir]}: 1위 ${top.name} ${top.tf} 검증 ${fmtPct(top.test.avg)} · 통과 ${passed}/${labRows.length}`);
+    log(`연구실 ${days}일 ${modeTxt}${gx ? " · 넓은 익절·손절" : ""} · ${cmode.label.split(" — ")[0]} · ${DIR_KO[dir]}: 1위 ${top.name} ${top.tf} 검증 ${fmtPct(top.test.avg)} · 통과 ${passed}/${labRows.length}`);
   } catch (e) {
     $("labInfo").textContent = "오류: " + e.message; log("연구실 " + e.message, "err");
   } finally { labRunning = false; btn.disabled = false; setTimeout(() => prog.style.display = "none", 800); }
@@ -942,13 +945,13 @@ function renderLabDetail() {
   renderExitMap(r);
   renderLev(r);
 }
-function exitAxes(s) {
-  const g = k => s.params.find(x => x.k === k)?.grid;
+function exitAxes(s, gx) {
+  const g = k => { const x = s.params.find(y => y.k === k); return x ? Core.gridValues(s, x, gx) : null; };
   const xk = g("takeAtr") ? "takeAtr" : g("trailAtr") ? "trailAtr" : null;
   return { ys: g("stopAtr"), xk, xs: xk ? g(xk) : [null] };
 }
 function renderExitMap(r) {
-  const { ys, xk, xs } = exitAxes(r.s);
+  const { ys, xk, xs } = exitAxes(r.s, r.gx);
   if (!ys) { $("exitMap").innerHTML = `<div class="note">이 전략은 익절·손절이 고정이라 지도가 없어요.</div>`; return; }
   if (!r.exitMap) r.exitMap = ys.map(y => xs.map(x => {
     let sum = 0, n = 0, trades = 0;
@@ -1056,22 +1059,24 @@ function applyPortfolio(slots, mode, label, opts = {}) {
   if (running) { startTicker(); tick(); }
   return true;
 }
-// 연구실 롤링 검증(180일, 학습60→검증30 × 4구간, 선물 시장가, 롱+숏)에서 반복해서 상위에 오른 조합
+// v2: 연구실 롤링 검증(180일, 학습60→검증30 × 4구간, 선물 시장가, 롱+숏, 1h)에서 분할 매매를 켠 버전이 일관되게 개선된 조합
 const PRESET = {
+  version: "v2",
   slots: [
-    { id: "s1", name: "투매 반등 +횡보장만", strategyId: "capitulation", interval: "1h", dir: "both", weight: 40,
-      params: { reds: 3, dropAtr: 3, stopAtr: 2.5, takeAtr: 2.5, regime: 2 }, why: "3/4구간 +, 승률 73%, 넓은 손절이 꾸준히 유리" },
-    { id: "s2", name: "눌림목 반등 (ATR)", strategyId: "pullback", interval: "1h", dir: "both", weight: 30,
-      params: { bbStd: 2.5, rsiEntry: 38, stopAtr: 1.5, takeAtr: 2 }, why: "세 번 연속 3/4구간 +" },
-    { id: "s3", name: "채널 돌파 + ADX +추세장만", strategyId: "donchian", interval: "1h", dir: "both", weight: 30,
-      params: { chN: 20, adxMin: 25, stopAtr: 1.5, trailAtr: 4.5, regime: 1 }, why: "추세장 담당 · 거래당 여유 +0.8%" },
+    { id: "s1", name: "투매 반등 +횡보장 +분할매수·매도", strategyId: "capitulation", interval: "1h", dir: "both", weight: 40,
+      params: { reds: 3, dropAtr: 3, stopAtr: 2.5, takeAtr: 2.5, regime: 2, scaleIn: 1, scaleOut: 1 }, why: "4/4구간 +, 승률 81%, 낙폭 −8%" },
+    { id: "s2", name: "눌림목 반등 +분할매도", strategyId: "pullback", interval: "1h", dir: "both", weight: 35,
+      params: { bbStd: 2.5, rsiEntry: 38, stopAtr: 4, takeAtr: 2, scaleOut: 1 }, why: "4/4구간 +, 낙폭 −5.6%" },
+    { id: "s3", name: "스퀴즈 돌파 +봉내부 +분할매도", strategyId: "squeeze", interval: "1h", dir: "both", weight: 25,
+      params: { sqLookback: 60, volMult: 1.5, stopAtr: 1.5, trailAtr: 2, flow: 1, scaleOut: 1 }, why: "추세장 담당 · 3/4구간 +, 낙폭 −1.9%" },
   ],
   settings: { symbols: "BTCUSDT, ETHUSDT, SOLUSDT", leverage: 1, positionPct: 0.33, cooldownBars: 3, pollSeconds: 15 },
 };
+$("presetVer").textContent = PRESET.version + " · 분할 매매 적용";
 $("presetList").innerHTML = PRESET.slots.map(sl => `<span class="kv" title="${esc(sl.why)}">${esc(sl.name)} · ${sl.interval} · ${sl.weight}%</span>`).join("") +
   `<span class="muted small"> BTC·ETH·SOL · 전략마다 자금의 일부를 종목당 1/3씩</span>`;
 $("presetBtn").onclick = () => {
-  if (applyPortfolio(PRESET.slots.map(({ why, ...sl }) => ({ ...sl })), COST_MODES.futTaker, "⚡ 추천 세팅", { settings: PRESET.settings, start: true })) toast("세팅 완료 · 실행 중이에요");
+  if (applyPortfolio(PRESET.slots.map(({ why, ...sl }) => ({ ...sl })), COST_MODES.futTaker, `⚡ 추천 세팅 ${PRESET.version}`, { settings: PRESET.settings, start: true })) toast("세팅 완료 · 실행 중이에요");
 };
 
 // ---------------- 설정 화면 ----------------
@@ -1178,7 +1183,7 @@ $("copyBtn").onclick = async () => {
       `  #${k + 1} ${r.name} ${r.tf} | ${r.folds.length > 1 ? `+구간 ${r.foldPos}/${r.folds.length} [${r.folds.map(f => fmtPct(f.test.avg, 1)).join(" ")}] | ` : ""}검증 ${fmtPct(r.test.avg)} ${r.test.trades}회(L${r.test.longs}/S${r.test.shorts}) 승률 ${(r.test.winRate * 100).toFixed(0)}% MDD ${fmtPct(r.test.mdd)} PF ${fmtPF(r.test.pf)} | 거래당 ${fmtPct(r.test.edge, 3)} 여유 ${fmtPct(r.test.edge - r.rt, 3)} | 학습 ${fmtPct(r.train.avg)} | 보유 ${fmtPct(r.test.bh)} | 최근설정 ${paramText(r.s, r.p, true)}`).join("\n") : "",
     labMeta?.combo ? `조합 (${labMeta.combo.names.join(" + ")}): 검증 ${fmtPct(labMeta.combo.avg)} 최대낙폭 ${fmtPct(labMeta.combo.mdd)}` : "",
     labRows[labSel]?.levRows ? `레버리지 (${labRows[labSel].name} ${labRows[labSel].tf}): ` + labRows[labSel].levRows.map(x => `${x.lev}배 ${fmtPct(x.avg)} MDD ${fmtPct(x.mdd)}${x.liq ? ` 청산${x.liq}` : ""}`).join(" / ") : "",
-    labRows[labSel]?.exitMap ? `익절·손절 지도 (${labRows[labSel].name} ${labRows[labSel].tf}, 행=손절, 열=${exitAxes(labRows[labSel].s).xk || "-"} ${exitAxes(labRows[labSel].s).xs.join("/")}): ` + labRows[labSel].exitMap.map(row => `손절${row[0].y}: ` + row.map(c => fmtPct(c.avg, 1) + (c.picked ? "★" + c.picked : "")).join(" ")).join(" | ") : "",
+    labRows[labSel]?.exitMap ? `익절·손절 지도 (${labRows[labSel].name} ${labRows[labSel].tf}, 행=손절, 열=${exitAxes(labRows[labSel].s, labRows[labSel].gx).xk || "-"} ${exitAxes(labRows[labSel].s, labRows[labSel].gx).xs.join("/")}): ` + labRows[labSel].exitMap.map(row => `손절${row[0].y}: ` + row.map(c => fmtPct(c.avg, 1) + (c.picked ? "★" + c.picked : "")).join(" ")).join(" | ") : "",
     `일반 설정: 종목 ${S.symbols} · 비중 ${S.positionPct} · 최대 ${S.maxPositions}종목 · 수수료 ${S.feeRate} · 슬리피지 ${S.slippageBps}bp · 펀딩 ${S.fundingRate}`,
     "최근 로그:", ...logs.slice(-12).map(l => `  ${fmtT(l.t)} ${l.msg}`),
   ].filter(Boolean).join("\n");

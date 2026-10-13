@@ -475,11 +475,22 @@
   }
   const byId = id => STRATEGIES.find(s => s.id === id) || STRATEGIES[0];
   const defaults = s => Object.fromEntries(s.params.map(x => [x.k, x.def]));
-  function grid(s, override) {
+  // override: 고정할 값 / gx: 비교값을 바꿔 끼울 목록 (그 전략에 원래 비교값이 있는 항목만, maxHold는 배수로)
+  function gridValues(s, x, gx) {
+    if (!gx) return x.grid;
+    if (x.k === "maxHold" && gx.holdMult) return gx.holdMult.map(m => Math.round(x.def * m));
+    return x.grid && gx[x.k] ? gx[x.k] : x.grid;
+  }
+  function grid(s, override, gx) {
     let combos = [{ ...defaults(s), ...(override || {}) }];
-    for (const x of s.params) if (x.grid && !(override && x.k in override)) combos = combos.flatMap(c => x.grid.map(v => ({ ...c, [x.k]: v })));
+    for (const x of s.params) {
+      const vals = gridValues(s, x, gx);
+      if (vals && !(override && x.k in override)) combos = combos.flatMap(c => vals.map(v => ({ ...c, [x.k]: v })));
+    }
     return combos;
   }
+  // 넓은 익절·손절 탐색용 비교값 (ATR 배수)
+  const WIDE_GRID = { stopAtr: [2.5, 4, 6, 8], takeAtr: [2.5, 4, 6, 8], trailAtr: [3, 4.5, 6, 8], holdMult: [1, 3] };
 
   // ---------------- 숏 신호용 뒤집힌 차트 ----------------
   // 가격을 1/가격으로 뒤집으면 하락이 상승처럼 보임 → 같은 롱 전략을 그대로 숏 신호로 사용
@@ -773,7 +784,7 @@
   }
 
   const Core = { ema, rma, rsi, sma, bollinger, rollMax, rollMin, atr, macd, stochRsi, adx, vwap, makeI,
-                 STRATEGIES, byId, defaults, grid, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
+                 STRATEGIES, byId, defaults, grid, gridValues, WIDE_GRID, regimeOk, flowOk, entryOk, kindOf, warmupOf, viewOf, KIND_REGIME, effRatio, dayInfo, seasonForecast, tfOf, DAY, HOUR, checkExit, scaleInStep, scaleOutStep, openPos, PaperBroker, FuturesBroker, makeBroker, mirror, simulate, stats, resample, ok, FUNDING_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = Core;
   else root.Core = Core;
 })(typeof window !== "undefined" ? window : globalThis);
