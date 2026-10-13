@@ -191,12 +191,8 @@ canvas { display: block; width: 100%; height: 240px; }
             <option value="none">분할 끔</option>
           </select>
           <label class="chip" title="손절·익절·추적손절 비교값을 2.5~8 ATR로, 최대 보유 시간을 3배까지 넓혀서 비교해요"><input type="checkbox" id="labWide"> 넓은 익절·손절 탐색 (2.5~8 ATR)</label>
-          <span class="muted small">추세형(채널 돌파)은 추세장 필터 + 러너가 자동으로 붙어요 (1년 검증에서 효과 확인) · 분할: 총 투자금·최초 손절선은 그대로</span></div>
-        <div class="row"><label class="muted small">추가 비교</label>
-          <label class="chip" title="30일 추세선 위에서는 롱만, 아래에서는 숏만"><input type="checkbox" id="labBias"> 큰 방향 필터</label>
-          <label class="chip" title="롱·숏 각각 최근 30거래의 승률·손익비로 켈리 위험%를 매번 다시 계산 — 잘 맞는 쪽에 더 크게. 학습 구간 거래로 시작값을 잡아요"><input type="checkbox" id="labKelly"> 켈리 동적 위험</label>
-          <select id="labKellyFrac" title="켈리 강도"><option value="0.25">1/4 켈리</option><option value="0.5">1/2 켈리 (공격적)</option></select>
-          <span class="muted small">최대</span><input type="number" id="labRiskMax" value="5" min="1" max="20" step="1" style="width:56px"><span class="muted small">%</span>
+          <span class="muted small">자동 적용 (1년 검증 근거): 채널 돌파 = 추세장 필터 + 러너, 눌림목 = 큰 방향 필터 · 분할: 총 투자금·최초 손절선은 그대로</span></div>
+        <div class="row"><label class="muted small">자금 관리</label>
           <label class="chip" title="위험 기준 금액이 증거금 상한을 넘으면 필요한 만큼 레버리지를 자동으로 (최대 배수까지)"><input type="checkbox" id="labAutoLev"> 자동 레버리지 최대</label><input type="number" id="labMaxLev" value="3" min="1" max="20" style="width:56px"><span class="muted small">배</span>
           <label class="muted small" style="margin-left:8px">투자 금액</label>
           <select id="labSizing"><option value="fixed">고정 (종목당 자산 100%)</option><option value="risk">손절 거리 기준</option></select>
@@ -821,9 +817,7 @@ function renderLabControls() {
   $("labTfs").innerHTML = LAB_TFS.map(t => `<label class="chip"><input type="checkbox" value="${t}" ${tfs.includes(t) ? "checked" : ""}>${t}</label>`).join("");
   $("labSplit").value = store.get("cs_lab_split2", "both");
   $("labWide").checked = store.get("cs_lab_wide", false);
-  { const ex = store.get("cs_lab_extra", { bias: true, sizing: "risk", autoLev: true }); $("labBias").checked = ex.bias !== false;
-    $("labKellyFrac").value = String(ex.kellyFrac ?? 0.25); $("labRiskMax").value = ex.riskMax ?? 5;
-    $("labKelly").checked = !!ex.kelly; $("labAutoLev").checked = !!ex.autoLev; $("labMaxLev").value = ex.maxLev ?? 3;
+  { const ex = store.get("cs_lab_extra", { sizing: "risk", autoLev: true }); $("labAutoLev").checked = ex.autoLev !== false; $("labMaxLev").value = ex.maxLev ?? 3;
     $("labSizing").value = ex.sizing || "fixed"; $("labRisk").value = ex.risk ?? 2; }
   const syncSz = () => { $("labRiskBox").style.display = $("labSizing").value === "risk" ? "" : "none"; };
   $("labSizing").onchange = syncSz; syncSz();
@@ -868,13 +862,11 @@ async function runLab() {
   store.set("cs_lab_tfs", tfs); store.set("cs_lab_strats", ids); store.set("cs_lab_mode", { mode, days, train: trainD, test: testD });
   const splitMode = $("labSplit").value; store.set("cs_lab_split2", splitMode);
   const gx = $("labWide").checked ? Core.WIDE_GRID : null; store.set("cs_lab_wide", !!gx);
-  const extra = { bias: $("labBias").checked, sizing: $("labSizing").value, risk: +$("labRisk").value || 2,
-                  kelly: $("labKelly").checked, kellyFrac: +$("labKellyFrac").value || 0.25, riskMax: Math.max(1, +$("labRiskMax").value || 5),
+  const extra = { sizing: $("labSizing").value, risk: +$("labRisk").value || 2,
                   autoLev: $("labAutoLev").checked, maxLev: Math.max(1, +$("labMaxLev").value || 3) };
   store.set("cs_lab_extra", extra);
-  const KELLY = { kelly: 1, kellyFrac: extra.kellyFrac, riskMax: extra.riskMax / 100 };
-  const EXTRAS = [...(extra.bias ? [[" +큰방향", { bias: 1 }]] : []), ...(extra.kelly ? [[" +켈리", KELLY]] : []),
-                  ...(extra.bias && extra.kelly ? [[" +큰방향 +켈리", { bias: 1, ...KELLY }]] : [])];
+  // 켈리 동적 위험은 1년 검증에서 두 전략 모두 악화(수익÷낙폭 0.80→0.50, 0.53→0.20)되어 연구실에서 제외. 설정 탭 옵션으로만 남김
+  const EXTRAS = [];
   const SPLITS = { all: [["", null], [" +분할매수", { scaleIn: 1 }], [" +분할매도", { scaleOut: 1 }], [" +분할매수·매도", { scaleIn: 1, scaleOut: 1 }]],
     both: [[" +분할매수·매도", { scaleIn: 1, scaleOut: 1 }]], out: [[" +분할매도", { scaleOut: 1 }]], none: [["", null]] }[splitMode];
   const costKey = $("labCost").value, cmode = COST_MODES[costKey], dir = cmode.market === "spot" ? "long" : $("labDir").value;
@@ -884,7 +876,8 @@ async function runLab() {
         variants = strats.flatMap(s => {
           // 추세형: 추세장 필터 + 러너 자동 (1년 검증: 필터 없으면 상위권 탈락, 러너로 수익÷낙폭 0.59 → 0.80)
           // 되돌림형: 필터 없이 (횡보장 필터는 결과가 거의 같았음), 러너 없음 (오히려 나빠짐)
-          const out = s.kind === "trend" ? [{ s, name: s.name + " +추세장만 +러너", ov: { regime: 1, runner: 1, scaleOut: 1 } }] : [{ s, name: s.name, ov: null }];
+          // 되돌림형: 큰 방향 필터 자동 (1년: 수익÷낙폭 −0.43 → 0.53). 추세형에는 해로워서(0.80 → −0.07) 붙이지 않음
+          const out = s.kind === "trend" ? [{ s, name: s.name + " +추세장만 +러너", ov: { regime: 1, runner: 1, scaleOut: 1 } }] : [{ s, name: s.name + " +큰방향", ov: { bias: 1 } }];
           const withSplit = out.flatMap(v => SPLITS.map(([sn, so]) => ({ s: v.s, name: v.name + sn, ov: v.ov || so ? { ...(v.ov || {}), ...(so || {}) } : null })));
           return withSplit.flatMap(v => [v, ...EXTRAS.map(([en, eo]) => ({ s: v.s, name: v.name + en, ov: { ...(v.ov || {}), ...eo } }))]);
         }), prog = $("labProg"), bar = prog.firstElementChild;
