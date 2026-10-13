@@ -70,7 +70,7 @@ function walk(id, opt, grid) {
 const show = (label, W) => console.log(`${label.padEnd(30)} 검증 누적 ${pct(W.ret).padStart(8)} (연 ${pct(W.cagr)}) 낙폭 ${pct(W.mdd)} | +구간 ${W.pos}/${W.res.length} [${W.res.map(x => pct(x.test.ret, 0)).join(" ")}] | ${W.n}회 (하루 ${W.perDay.toFixed(1)}) 승률 ${Math.round(W.win * 100)}% 거래당 가격이득 ${pct(W.edge, 3)} 지정가 비율 ${Math.round(W.maker * 100)}%`);
 
 const best = {};
-for (const id of Object.keys(Scalp.STRATS)) {
+for (const id of (process.env.ONLY || Object.keys(Scalp.STRATS).join(",")).split(",")) {
   const s = Scalp.STRATS[id];
   console.log(`== ${s.name} (${Scalp.gridOf(id).length}개 조합) ==`);
   const W = walk(id, BASE); show("실제 비용", W); best[id] = W;

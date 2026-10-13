@@ -24,7 +24,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p out
-          node --max-old-space-size=6000 tools/scalp-research.js 24 2>&1 | tee out/scalp.txt
+          ONLY=spike,hbrk node --max-old-space-size=6000 tools/scalp-research.js 24 2>&1 | tee out/scalp.txt
       - name: Publish result
         if: always()
         run: |

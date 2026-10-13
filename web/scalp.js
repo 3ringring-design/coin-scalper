@@ -48,17 +48,18 @@
   //  dir = +1 (EMA 위 · EMA 상승 · 효율비율 ≥ thr), −1 (반대), 0 (그 외)
   //  er  = 효율비율 (0 = 지그재그 횡보, 1 = 한 방향)
   function htf(c, emaN, erLen) {
-    const L = c.ts.length, hc = [], hIdx = new Int32Array(L);
+    const L = c.ts.length, hc = [], hh = [], hl = [], hIdx = new Int32Array(L);
     let cur = -1;
     for (let i = 0; i < L; i++) {
       const h = Math.floor(c.ts[i] / H);
-      if (h !== cur) { hc.push(c.close[i]); cur = h; } else hc[hc.length - 1] = c.close[i];
+      if (h !== cur) { hc.push(c.close[i]); hh.push(c.high[i]); hl.push(c.low[i]); cur = h; }
+      else { const k = hc.length - 1; hc[k] = c.close[i]; hh[k] = Math.max(hh[k], c.high[i]); hl[k] = Math.min(hl[k], c.low[i]); }
       hIdx[i] = hc.length - 2;                        // 직전에 끝난 1시간봉
     }
     const n = hc.length, ema = new Float64Array(n), er = new Float64Array(n).fill(NaN), k = 2 / (emaN + 1);
     for (let j = 0; j < n; j++) ema[j] = j ? ema[j - 1] + k * (hc[j] - ema[j - 1]) : hc[j];
     for (let j = erLen; j < n; j++) { let p = 0; for (let q = j - erLen + 1; q <= j; q++) p += Math.abs(hc[q] - hc[q - 1]); er[j] = p > 0 ? Math.abs(hc[j] - hc[j - erLen]) / p : 0; }
-    return { hc, ema, er, hIdx, warm: emaN * 3 };
+    return { hc, hh, hl, ema, er, hIdx, warm: emaN * 3 };
   }
 
   function features(c) {
@@ -73,6 +74,8 @@
       flow: n => get("fl" + n, () => { const tb = rollSum(c.takerBuy, n), v = rollSum(c.volume, n); return tb.map((x, i) => v[i] > 0 ? x / v[i] : 0.5); }),
       htf: (emaN, erLen) => get(`htf${emaN}|${erLen}`, () => htf(c, emaN, erLen)),
       memo: get,
+      ret: n => get("rt" + n, () => { const r = new Float64Array(c.close.length).fill(NaN); for (let i = n; i < r.length; i++) r[i] = c.close[i] / c.close[i - n] - 1; return r; }),
+      retSd: n => get("rs" + n, () => { const r1 = new Float64Array(c.close.length).fill(0); for (let i = 1; i < r1.length; i++) r1[i] = c.close[i] / c.close[i - 1] - 1; return rollMeanSd(r1, n).sd; }),
     };
   }
   // 큰 흐름 방향 (i번째 1분봉에서 쓸 수 있는 것만)
@@ -144,6 +147,40 @@
       defaults: { htfN: 50, erLen: 24, erThr: 0.2, bbN: 20, bbK: 2.5, erMax: 0.2, exp: 5, s: 3, T: 60, longOnly: 0, m: 0 },
     },
   };
+  STRATS.spike = {
+    name: "1분 급등락 되돌림", desc: "1분 만에 평소의 z배 넘게 급락(급등)하고 거래량이 폭발하면, 과하게 밀린 것으로 보고 반대로 짧게 받아요 (청산 연쇄 후 되돌림).",
+    make(F, p) {
+      const c = F.c, A = F.atr(), R = F.ret(p.bars), SD = F.retSd(240), VA = F.volAvg(60);
+      return i => {
+        const a = A[i], r = R[i], sd = SD[i], va = VA[i];
+        if (!(a > 0) || !(sd > 0) || !(va > 0) || c.volume[i] < p.vm * va) return null;
+        const z = r / (sd * Math.sqrt(p.bars));
+        if (z <= -p.z) return p.k ? { dir: 1, limit: c.close[i] - p.k * a, atr: a, exp: i + 3 } : { dir: 1, market: true, atr: a };
+        if (!p.longOnly && z >= p.z) return p.k ? { dir: -1, limit: c.close[i] + p.k * a, atr: a, exp: i + 3 } : { dir: -1, market: true, atr: a };
+        return null;
+      };
+    },
+    grid: { z: [4, 6, 8], vm: [3, 6], k: [0, 0.5], m: [2, 4], s: [3, 6], T: [15, 60] },
+    defaults: { htfN: 50, erLen: 24, erThr: 0.2, bars: 1, z: 6, vm: 3, k: 0, m: 3, s: 4, T: 30, longOnly: 0 },
+  };
+  STRATS.hbrk = {
+    name: "1시간 돌파 · 1분 정밀 진입", desc: "6년 검증에서 살아남은 1시간 채널 돌파 신호를, 1분봉에서 돌파가 일어나는 순간 바로 잡아요. 손절을 1분 ATR 기준으로 짧게 둬서 같은 위험으로 더 큰 레버리지를 써요. 추적손절로 추세를 끝까지 따라가요.",
+    make(F, p) {
+      const c = F.c, A = F.atr(), h = F.htf(p.htfN, p.erLen), tr = trendArrays(F, p);
+      const lvl = F.memo("hb" + p.chN, () => {               // 직전에 끝난 1시간봉까지 chN개의 최고가
+        const hx = priorMax(Float64Array.from(h.hh), p.chN), out = new Float64Array(F.n).fill(NaN);
+        for (let i = 0; i < F.n; i++) { const j = h.hIdx[i] + 1; if (j > 0 && j < hx.length) out[i] = hx[j]; }
+        return out;
+      });
+      return i => {
+        const a = A[i], L = lvl[i];
+        if (!(a > 0) || !(L > 0) || !(tr.er[i] >= p.erThr)) return null;
+        return c.close[i] > L && c.close[i - 1] <= L ? { dir: 1, market: true, atr: a } : null;
+      };
+    },
+    grid: { chN: [20, 48], s: [6, 12, 24], tr: [12, 24, 48], erThr: [0.2, 0.3] },
+    defaults: { htfN: 50, erLen: 24, erThr: 0.3, chN: 20, m: 0, s: 12, tr: 24, T: 1440 * 5, longOnly: 1 },
+  };
   function gridOf(id, extra) {
     const s = STRATS[id], g = { ...s.grid, ...(extra || {}) }, keys = Object.keys(g);
     let out = [{ ...s.defaults }];
@@ -176,7 +213,7 @@
       if (!(qty > 0)) return;
       const notional = qty * price, fee = notional * (maker ? o.makerFee : o.takerFee);
       cash -= fee; fees += fee; if (maker) makerN++;
-      s.pos = { dir, entry: price, qty, i0: i, stop: price - dir * stopD, take: take ?? (p.m > 0 ? price + dir * p.m * atrV : NaN), fee, maker, risk: qty * stopD, t0: T[0] };
+      s.pos = { dir, entry: price, qty, i0: i, stop: price - dir * stopD, take: take ?? (p.m > 0 ? price + dir * p.m * atrV : NaN), fee, maker, risk: qty * stopD, atr: atrV, ext: price };
     };
     const close = (s, k, price, maker, why, t) => {
       const ps = s.pos, notional = ps.qty * price, fee = notional * (maker ? o.makerFee : o.takerFee), g = ps.dir * ps.qty * (price - ps.entry);
@@ -198,12 +235,16 @@
         const ps = s.pos;
         if (ps) {
           const d = ps.dir;
+          if (p.tr > 0 && i > ps.i0) {                       // 추적손절: 직전 봉까지의 최고(최저)가 기준
+            ps.stop = d > 0 ? Math.max(ps.stop, ps.ext - p.tr * ps.atr) : Math.min(ps.stop, ps.ext + p.tr * ps.atr);
+          }
           if (d > 0 ? c.low[i] <= ps.stop : c.high[i] >= ps.stop) {
             const gap = i > ps.i0 && (d > 0 ? c.open[i] < ps.stop : c.open[i] > ps.stop), px = (gap ? c.open[i] : ps.stop) * (1 - d * slip);
             close(s, k, px, false, "stop", T[t]); s.last = i;
           } else if (i > ps.i0 && ok(ps.take) && (d > 0 ? c.high[i] > ps.take * (1 + th) : c.low[i] < ps.take * (1 - th)) && (d > 0 ? ps.take > ps.entry : ps.take < ps.entry)) {
             close(s, k, ps.take, true, "take", T[t]); s.last = i;
           } else if (i - ps.i0 >= p.T) { close(s, k, c.close[i] * (1 - d * slip), false, "time", T[t]); s.last = i; }
+          if (s.pos) s.pos.ext = d > 0 ? Math.max(s.pos.ext, c.high[i]) : Math.min(s.pos.ext, c.low[i]);
         }
         s.px = c.close[i];
         if (!s.pos && !s.pend && !s.mkt && i - s.last > cd) {
