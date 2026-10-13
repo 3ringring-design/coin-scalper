@@ -180,6 +180,25 @@ canvas { display: block; width: 100%; height: 240px; }
       <div class="scroll"><table id="scPos"></table></div>
       <div class="scroll"><table id="scTrades"></table></div>
       <div class="log" id="scLog" style="max-height:160px"></div>
+      <h2 style="border-top:1px solid var(--line)">📼 과거 데이터로 돌려보기 <span class="muted small">위에서 고른 전략·위험·레버리지로, 고른 기간의 1분봉을 처음부터 끝까지 그대로 재생해요</span></h2>
+      <div class="pad">
+        <div class="row">
+          <label class="muted small">기간</label><input type="number" id="sbDays" value="14" min="1" max="120" style="width:64px"><span class="muted small">일</span>
+          <label class="muted small">끝 날짜</label><input type="date" id="sbEnd"><span class="muted small">(비우면 지금까지)</span>
+          <label class="muted small">비용</label><select id="sbCost"><option value="real">실제 (시장가 0.05%+1.5bp · 지정가 0.02%)</option><option value="maker0">지정가 수수료 0 (VIP 가정)</option><option value="zero">비용 0 (진단용)</option></select>
+          <button class="btn primary" id="sbBtn">▶ 과거 데이터로 돌리기</button>
+          <span class="muted small" id="sbInfo"></span>
+        </div>
+        <div class="row" id="sbParams"></div>
+        <div id="sbOut"></div>
+      </div>
+      <div id="sbCharts" style="display:none">
+        <h2 style="border-top:1px solid var(--line)">자산 곡선 <span class="muted small">파란선 = 실험 계좌 · 회색 = BTC 그냥 보유</span></h2>
+        <canvas id="sbEqCv"></canvas>
+        <h2 style="border-top:1px solid var(--line)">거래 <span class="muted small" id="sbTrHint">행을 누르면 그 거래의 1분봉 차트를 보여줘요</span></h2>
+        <canvas id="sbCandle" style="height:300px;display:none"></canvas>
+        <div class="scroll" style="max-height:420px"><table id="sbTrades"></table></div>
+      </div>
     </div>
   </section>
 
@@ -1383,7 +1402,7 @@ const scReconfig = (why) => {
   const was = sc.running; sc = scNew(id, risk, lev); sc.running = was; scInit();
   scLog(`실험 설정: ${Scalp.STRATS[id].name} · 위험 ${(risk * 100).toFixed(2)}% · 최대 ${lev}배 · 새 계좌 1,000 USDT`); scSave(); renderScalp();
 };
-$("scStrat").onchange = () => scReconfig("전략을 바꾸면");
+$("scStrat").onchange = () => { scReconfig("전략을 바꾸면"); renderSbParams(); };
 $("scRisk").onchange = () => scReconfig("위험을 바꾸면");
 $("scLev").onchange = () => scReconfig("레버리지를 바꾸면");
 $("scRun").onclick = () => {
@@ -1393,6 +1412,115 @@ $("scRun").onclick = () => {
 };
 $("scReset").onclick = () => { if (!confirm("실험 계좌를 1,000 USDT로 새로 시작할까요?")) return; const was = sc.running; sc = scNew(sc.id, sc.risk, sc.maxLev); sc.running = was; scInit(); scLog("실험 계좌 초기화"); scSave(); renderScalp(); };
 window.addEventListener("pagehide", () => { if (scLockOwner() === TAB_ID) store.del("cs_scalp_lock"); });
+// ---------- 📼 과거 데이터 재생 (백테스트): 실시간과 같은 Scalp.simulate ----------
+const sbCache = {};
+async function fetchRange(sym, iv, t0, t1, onProg) {
+  const tf = TF_MS[iv] || 6e4, rows = []; let start = t0;
+  while (start < t1) {
+    const b = await klines(sym, iv, 1000, start);
+    if (!b.length) break;
+    for (const r of b) if (r[0] < t1) rows.push(r);
+    start = b[b.length - 1][0] + tf; onProg && onProg(rows.length);
+    if (b.length < 1000) break;
+  }
+  if (rows.length && rows[rows.length - 1][0] + tf > Date.now()) rows.pop();
+  return toCandles(rows);
+}
+const SB_PKEYS = { pull: ["k", "m", "s", "T", "longOnly"], brk: ["N", "flowThr", "vm", "m", "s", "T", "useHtf"], rev: ["bbK", "erMax", "s", "T", "longOnly"],
+                   spike: ["z", "vm", "k", "m", "s", "T"], hbrk: ["chN", "erThr", "s", "tr"] };
+const SB_LABEL = { k: "지정가 거리 (ATR)", m: "익절 (ATR)", s: "손절 (ATR)", T: "최대 보유 (분)", longOnly: "롱만 (1)", N: "돌파 기간 (분)", flowThr: "체결강도 기준",
+                   vm: "거래량 배수", useHtf: "1시간 흐름 필터 (1)", bbK: "밴드 배수", erMax: "횡보 기준 (효율비율 <)", z: "급변 크기 (표준편차)", chN: "1시간 채널 (시간)", erThr: "추세 기준 (효율비율 ≥)", tr: "추적손절 (1분 ATR)" };
+let sbP = null;
+function renderSbParams() {
+  sbP = Scalp.liveParams(sc.id);
+  $("sbParams").innerHTML = `<span class="muted small">설정 (바꿔서 돌려볼 수 있어요):</span>` + SB_PKEYS[sc.id].map(k =>
+    `<label class="muted small" style="margin-left:6px">${SB_LABEL[k] || k}</label><input type="number" step="any" data-k="${k}" value="${sbP[k]}" style="width:64px">`).join("");
+  $("sbParams").querySelectorAll("input").forEach(inp => inp.onchange = () => { sbP[inp.dataset.k] = +inp.value; });
+}
+let sbRes = null;
+async function runScalpBacktest() {
+  const btn = $("sbBtn"); if (btn.disabled) return;
+  const days = Math.max(1, Math.min(120, +$("sbDays").value || 14)), endV = $("sbEnd").value;
+  const t1 = endV ? Math.min(Date.parse(endV + "T00:00:00Z") + DAY, Date.now()) : Date.now(), t0 = t1 - days * DAY;
+  const id = sc.id, p = { ...sbP }, warm = Scalp.needBars(id, p), syms = symbols(), cost = $("sbCost").value;
+  const o = { ...scOpts(), from: 0, curve: true, trades: true,
+              ...(cost === "zero" ? { takerFee: 0, makerFee: 0, slip: 0 } : cost === "maker0" ? { makerFee: 0 } : {}) };
+  btn.disabled = true; const info = $("sbInfo");
+  try {
+    const sets = [];
+    for (const sym of syms) {
+      const key = `${sym}|${t0 - warm * 6e4}|${t1}`;
+      if (!sbCache[key]) {
+        for (const k in sbCache) delete sbCache[k];                       // 메모리 아끼기: 마지막 기간만 보관
+        sbCache[key] = await fetchRange(sym, "1m", t0 - warm * 6e4, t1, n => info.textContent = `${sym} 1분봉 받는 중… ${n.toLocaleString()}개`);
+      }
+      const c = sbCache[key]; if (c.ts.length > warm) sets.push({ sym, F: Scalp.features(c) });
+    }
+    if (!sets.length) throw new Error("데이터를 못 받았어요");
+    info.textContent = "계산 중…"; await sleep0();
+    const idx = Scalp.align(sets), T = sets[0].F.c.ts;
+    o.from = firstIdx(T, t0);
+    const r = Scalp.simulate(sets, idx, id, p, o);
+    // 그림용: 곡선은 15분마다 기록됨 → 같은 시점의 BTC 가격
+    const ct = [], cc = []; for (let t = o.from; t < T.length; t++) if (t % 15 === 0) { ct.push(T[t]); cc.push(sets[0].F.c.close[t]); }
+    sbRes = { r, sets, idx, p, id, days, t0, t1, cost, chart: { c: { ts: ct, close: cc }, start: 0, equity: r.curve } };
+    renderScalpBacktest();
+    info.textContent = `완료 — ${fmtPct(r.ret)} · ${r.trades}회`;
+    log(`📼 1분 스캘핑 재생 ${days}일 (${Scalp.STRATS[id].name}, 위험 ${(sc.risk * 100).toFixed(2)}%, 최대 ${sc.maxLev}배, ${$("sbCost").selectedOptions[0].text.split(" (")[0]}): ${fmtPct(r.ret)} · 낙폭 ${fmtPct(r.mdd, 1)} · ${r.trades}회 · 승률 ${Math.round(r.win * 100)}%`);
+  } catch (e) { info.textContent = "오류: " + e.message; }
+  finally { btn.disabled = false; }
+}
+function renderScalpBacktest() {
+  const { r, sets, days, cost, t0, t1 } = sbRes, L = r.list, rt = cost === "zero" ? 0 : 2 * (0.0005 + 0.00015);
+  const per = sets.map(s => { const tr = L.filter(t => t.sym === s.sym), c = s.F.c, a = firstIdx(c.ts, t0);
+    return { sym: s.sym, n: tr.length, pnl: tr.reduce((x, t) => x + t.pnl, 0), w: tr.filter(t => t.pnl > 0).length, bh: c.close[c.close.length - 1] / c.close[a] - 1 }; });
+  const why = {}; for (const t of L) why[t.why] = (why[t.why] || 0) + 1;
+  const fees = L.reduce((x, t) => x + t.fees, 0), avgR = L.length ? L.reduce((x, t) => x + t.r, 0) / L.length : 0;
+  $("sbOut").innerHTML = `<div class="cards" style="margin-top:10px">
+      <div class="card"><div class="k">수익률 (${days}일)</div><div class="v ${cls(r.ret)}">${fmtPct(r.ret)}</div></div>
+      <div class="card"><div class="k">최대 낙폭</div><div class="v down">${fmtPct(r.mdd, 1)}</div></div>
+      <div class="card"><div class="k">거래 / 승률</div><div class="v">${r.trades}회 · ${Math.round(r.win * 100)}%</div></div>
+      <div class="card"><div class="k">낸 수수료</div><div class="v">${fmtN(fees)}</div></div></div>
+    <div class="note" style="margin-top:8px">${fmtT(t0)} ~ ${fmtT(t1)} · 하루 ${(r.trades / days).toFixed(1)}회 · 평균 ${avgR >= 0 ? "+" : ""}${avgR.toFixed(2)}R ·
+      거래당 가격 이득 <b class="${cls(r.edge)}">${fmtPct(r.edge, 3)}</b> vs 시장가 왕복 비용 ${fmtPct(-rt, 3)} · 지정가 체결 비율 ${Math.round(r.makerShare * 100)}% ·
+      청산 사유: ${Object.entries(why).map(([k, v]) => `${({ stop: "손절", take: "익절", time: "시간", end: "기간 끝" })[k] || k} ${v}`).join(", ") || "-"}<br>
+      종목별: ${per.map(x => `${x.sym} <span class="${cls(x.pnl)}">${x.pnl >= 0 ? "+" : ""}${fmtN(x.pnl)}</span> (${x.n}회, 승 ${x.w}, 보유 ${fmtPct(x.bh, 1)})`).join(" · ")}</div>`;
+  $("sbCharts").style.display = "block";
+  drawChart($("sbEqCv"), sbRes.chart, sc.startingCash);
+  const rows = L.slice(-300).reverse();
+  $("sbTrades").innerHTML = rows.length ? `<tr><th>진입</th><th>청산</th><th>종목</th><th>방향</th><th>진입가</th><th>청산가</th><th>사유</th><th>레버리지</th><th>손익</th><th>R</th><th>수수료</th></tr>` +
+    rows.map((t, k) => `<tr class="click" data-k="${k}"><td>${fmtT(t.t0)}</td><td>${fmtT(t.t)}</td><td>${t.sym}</td><td>${t.dir > 0 ? "롱" : "숏"}</td><td>${fmtP(t.entry)}</td><td>${fmtP(t.exit)}</td>
+      <td>${({ stop: "손절", take: "익절", time: "시간", end: "기간 끝" })[t.why] || t.why}</td><td>${t.lev.toFixed(1)}배</td><td class="${cls(t.pnl)}">${t.pnl >= 0 ? "+" : ""}${fmtN(t.pnl)}</td><td>${t.r.toFixed(2)}</td><td class="muted">${fmtN(t.fees)}</td></tr>`).join("")
+    : `<tr><td class="empty">이 기간엔 거래가 없었어요.</td></tr>`;
+  $("sbTrades").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { $("sbTrades").querySelectorAll("tr.sel").forEach(x => x.classList.remove("sel")); tr.classList.add("sel"); drawTradeCandles(rows[+tr.dataset.k]); });
+  $("sbCandle").style.display = "none";
+}
+// 거래 하나: 진입 60분 전 ~ 청산 30분 후 1분봉, 진입(초록)·청산(빨강) 표시
+function drawTradeCandles(t) {
+  const s = sbRes.sets.find(x => x.sym === t.sym); if (!s) return;
+  const c = s.F.c, a = Math.max(0, firstIdx(c.ts, t.t0) - 60), b = Math.min(c.ts.length, firstIdx(c.ts, t.t) + 31);
+  const cv = $("sbCandle"); cv.style.display = "block";
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, Hh = cv.clientHeight; if (!W) return;
+  cv.width = W * dpr; cv.height = Hh * dpr; const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, Hh);
+  const css = getComputedStyle(document.documentElement), col = v => css.getPropertyValue(v);
+  let lo = Infinity, hi = -Infinity; for (let i = a; i < b; i++) { lo = Math.min(lo, c.low[i]); hi = Math.max(hi, c.high[i]); }
+  lo = Math.min(lo, t.entry, t.exit); hi = Math.max(hi, t.entry, t.exit); const pad = (hi - lo) * 0.06 || hi * 0.001;
+  const Lm = 70, R = 10, Tm = 18, B = 20, n = b - a, x = i => Lm + (W - Lm - R) * (i - a + 0.5) / n, y = v => Tm + (Hh - Tm - B) * (1 - (v - lo + pad) / (hi - lo + 2 * pad)), bw = Math.max(1, (W - Lm - R) / n * 0.7);
+  g.font = "11px IBM Plex Mono, monospace"; g.fillStyle = col("--muted"); g.strokeStyle = col("--line");
+  for (let k = 0; k <= 4; k++) { const v = lo - pad + (hi - lo + 2 * pad) * k / 4; g.beginPath(); g.moveTo(Lm, y(v)); g.lineTo(W - R, y(v)); g.stroke(); g.fillText(fmtP(v), 4, y(v) + 4); }
+  for (let i = a; i < b; i++) {
+    const up = c.close[i] >= c.open[i]; g.strokeStyle = g.fillStyle = up ? "#2fbf71" : "#f0565a";
+    g.beginPath(); g.moveTo(x(i), y(c.high[i])); g.lineTo(x(i), y(c.low[i])); g.stroke();
+    g.fillRect(x(i) - bw / 2, Math.min(y(c.open[i]), y(c.close[i])), bw, Math.max(1, Math.abs(y(c.open[i]) - y(c.close[i]))));
+  }
+  const mark = (ts, px, color, label) => { const i = firstIdx(c.ts, ts); g.strokeStyle = g.fillStyle = color; g.setLineDash([4, 3]); g.beginPath(); g.moveTo(Lm, y(px)); g.lineTo(W - R, y(px)); g.stroke(); g.setLineDash([]);
+    g.beginPath(); g.arc(x(i), y(px), 5, 0, 7); g.fill(); g.fillText(`${label} ${fmtP(px)}`, Math.min(x(i) + 8, W - 120), y(px) - 6); };
+  mark(t.t0, t.entry, "#4ea1ff", `${t.dir > 0 ? "롱" : "숏"} 진입`); mark(t.t, t.exit, t.pnl >= 0 ? "#2fbf71" : "#f0565a", "청산");
+  g.fillStyle = col("--muted"); g.fillText(`${t.sym} · ${fmtT(c.ts[a])} ~ ${fmtT(c.ts[b - 1])} · 1분봉`, Lm, 12);
+}
+$("sbBtn").onclick = runScalpBacktest;
+renderSbParams();
+
 scInit(); renderScalp();
 if (sc.running) { if (scLockOwner() && scLockOwner() !== TAB_ID) scViewer = true; else { scStartTimer(); scTick(); } renderScalp(); }
 
